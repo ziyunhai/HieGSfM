@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #    - 显式启用universe仓库
 #    - 安装OpenImageIO开发包（COLMAP 4.x强制依赖）
 #    - 创建opencv4空目录修复OpenImageIO的CMake配置bug
-#    - 验证OpenImageIO的CMake配置文件是否存在
+#    - 验证OpenImageIO的CMake配置文件是否存在（grep无匹配时不报错）
 RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common \
     && add-apt-repository -y universe \
     && apt-get update \
@@ -35,7 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     autoconf automake libtool flex bison \
     libopenimageio-dev openimageio-tools \
     && mkdir -p /usr/include/opencv4 \
-    && dpkg -L libopenimageio-dev | grep -E '\.cmake$' \
+    && dpkg -L libopenimageio-dev | grep -E '\.cmake$' || true \
     && rm -rf /var/lib/apt/lists/*
 
 # 3、安装Python业务依赖
