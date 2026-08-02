@@ -6,6 +6,16 @@ ENV CC=gcc-9
 ENV CXX=g++-9
 WORKDIR /workspace
 
+# ccache 配置（加速增量构建）
+ENV CCACHE_DIR=/workspace/ccache
+ENV CCACHE_BASEDIR=/workspace
+
+# 0、替换为阿里云apt源，国内构建加速
+RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+    sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+    find /etc/apt/sources.list.d/ -name "*.list" -exec sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' {} \; && \
+    find /etc/apt/sources.list.d/ -name "*.list" -exec sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' {} \;
+
 # 1、安装Kitware官方新版CMake
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget gnupg ca-certificates \
@@ -16,10 +26,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # 2、安装全套编译开发依赖
-#    - 显式启用universe仓库
-#    - 安装OpenImageIO开发包（COLMAP 4.x强制依赖）
-#    - 创建opencv4空目录修复OpenImageIO的CMake配置bug
-#    - 验证OpenImageIO的CMake配置文件是否存在（grep无匹配时不报错）
+#    - OpenImageIO：COLMAP 4.x 强制依赖
+#    - curl/ssl：COLMAP 下载功能必需
+#    - autotools/bison/flex：igraph 编译依赖
 RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common \
     && add-apt-repository -y universe \
     && apt-get update \
@@ -34,6 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     qtbase5-dev libqt5opengl5-dev libcgal-dev libcgal-qt5-dev libxml2-dev libomp-dev libsqlite3-dev libgtest-dev \
     autoconf automake libtool flex bison \
     libopenimageio-dev openimageio-tools \
+    libcurl4-openssl-dev libssl-dev \
     && mkdir -p /usr/include/opencv4 \
     && dpkg -L libopenimageio-dev | grep -E '\.cmake$' || true \
     && rm -rf /var/lib/apt/lists/*
@@ -60,14 +70,24 @@ RUN cd /workspace/project/thirdparty/PoseLib \
         -DCMAKE_CXX_STANDARD=17 \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     && make -j$(nproc) \
-    && make install
+    && make install \
+    && ldconfig
+
+# 编译安装 igraph（COLMAP DAGSfM 模块依赖）
+# 从 COLMAP 源码中 bundled 的 thirdparty/igraph 编译安装
+RUN cd /workspace/project/thirdparty/colmap/src/thirdparty/igraph \
+    && autoreconf -fi \
+    && ./configure --prefix=/usr/local \
+    && make -j$(nproc) \
+    && make install \
+    && ldconfig
 
 # 编译安装 COLMAP
-# 通过 CMAKE_PREFIX_PATH 显式指定 OpenImageIO 的 CMake 配置搜索路径
-# Ubuntu 20.04 的 OpenImageIO cmake 文件位于 /usr/lib/x86_64-linux-gnu/cmake/OpenImageIO/
-# 精简 CUDA 架构：75(T4/V100)、80(A100/A30)、86(RTX30/40系)
+# - CUDA 架构精简为 75(T4/V100)、80(A100/A30)、86(RTX30/40系)
+# - CMAKE_PREFIX_PATH 兜底指定 OpenImageIO CMake 路径
 RUN cd /workspace/project/thirdparty/colmap \
-    && mkdir build && cd build \
+    && mkdir -p build/.ccache \
+    && cd build \
     && cmake .. -GNinja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCUDA_ENABLED=ON \
@@ -76,7 +96,8 @@ RUN cd /workspace/project/thirdparty/colmap \
         -DCMAKE_CUDA_FLAGS="-Wno-deprecated-declarations" \
         -DCMAKE_PREFIX_PATH="/usr/lib/x86_64-linux-gnu/cmake/OpenImageIO;${CMAKE_PREFIX_PATH}" \
     && ninja -j$(nproc) \
-    && ninja install
+    && ninja install \
+    && ldconfig
 
 # 编译自身业务程序 hie_glomap
 RUN cd /workspace/project \
@@ -94,7 +115,8 @@ RUN cd /workspace/project \
         -DCMAKE_CUDA_ARCHITECTURES="75;80;86" \
         -DCMAKE_CUDA_FLAGS="-Wno-deprecated-declarations" \
     && ninja -j$(nproc) \
-    && ninja install
+    && ninja install \
+    && ldconfig
 
 # 收集程序运行依赖的全部系统动态库，打包存放
 RUN mkdir -p /tmp/deps_lib && \
@@ -103,8 +125,6 @@ RUN mkdir -p /tmp/deps_lib && \
         | sort -u \
         | xargs cp -t /tmp/deps_lib/ 2>/dev/null || true
 
-RUN ldconfig
-
 # ======================== 运行时阶段 runtime ========================
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu20.04 AS runtime
 
@@ -112,6 +132,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/bin:$PATH
 WORKDIR /data
+
+# 阿里云apt源
+RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+    sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
 # 安装基础运行时包
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -137,6 +161,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2 \
     libsqlite3-0 \
     libopenimageio2.1 \
+    libcurl4 \
+    libssl1.1 \
     && rm -rf /var/lib/apt/lists/*
 
 # 1、复制编译好的二进制文件、第三方库
