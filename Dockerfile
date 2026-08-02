@@ -15,7 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends cmake \
     && rm -rf /var/lib/apt/lists/*
 
-# 2、开启universe，安装全套编译开发依赖（移除了 libjasper-dev 和 libopenimageio-dev）
+# 2、开启universe，安装全套编译开发依赖
+#    新增：OpenImageIO（COLMAP 4.x 强制依赖）+ 修复其CMake配置bug
 RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common \
     && add-apt-repository universe \
     && apt-get update \
@@ -29,6 +30,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     libceres-dev libfreeimage-dev libflann-dev libgoogle-glog-dev libgflags-dev libglew-dev \
     qtbase5-dev libqt5opengl5-dev libcgal-dev libcgal-qt5-dev libxml2-dev libomp-dev libsqlite3-dev libgtest-dev \
     autoconf automake libtool flex bison \
+    libopenimageio-dev openimageio-tools \
+    && mkdir -p /usr/include/opencv4 \
     && rm -rf /var/lib/apt/lists/*
 
 # 3、安装Python业务依赖
@@ -55,15 +58,17 @@ RUN cd /workspace/project/thirdparty/PoseLib \
     && make -j$(nproc) \
     && make install
 
-# 编译安装 COLMAP（禁用 OpenImageIO，避免依赖问题）
+# 编译安装 COLMAP
+# 说明：COLMAP 4.x 已无 OpenImageIO_ENABLED 开关，该依赖为强制项，已在上方 apt 安装
+# 优化：精简 CUDA 架构，只保留主流算力 75(T4/V100)、80(A100/A30)、86(RTX30/40系)
+#       如需兼容更老显卡，可自行加回 35;50;52;60;61;70
 RUN cd /workspace/project/thirdparty/colmap \
     && mkdir build && cd build \
     && cmake .. -GNinja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCUDA_ENABLED=ON \
         -DGUI_ENABLED=ON \
-        -DOpenImageIO_ENABLED=OFF \
-        -DCMAKE_CUDA_ARCHITECTURES="35;50;52;60;61;70;75;80;86" \
+        -DCMAKE_CUDA_ARCHITECTURES="75;80;86" \
         -DCMAKE_CUDA_FLAGS="-Wno-deprecated-declarations" \
     && ninja -j$(nproc) \
     && ninja install
@@ -81,7 +86,7 @@ RUN cd /workspace/project \
         -DASAN_ENABLED=OFF \
         -DCCACHE_ENABLED=ON \
         -DCUDA_ENABLED=ON \
-        -DCMAKE_CUDA_ARCHITECTURES="35;50;52;60;61;70;75;80;86" \
+        -DCMAKE_CUDA_ARCHITECTURES="75;80;86" \
         -DCMAKE_CUDA_FLAGS="-Wno-deprecated-declarations" \
     && ninja -j$(nproc) \
     && ninja install
@@ -103,7 +108,8 @@ ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/bin:$PATH
 WORKDIR /data
 
-# 仅安装基础运行时包（无需 OpenImageIO 相关）
+# 仅安装基础运行时包
+# 新增：OpenImageIO 运行时库
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -126,6 +132,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libqt5widgets5 \
     libxml2 \
     libsqlite3-0 \
+    libopenimageio2.1 \
     && rm -rf /var/lib/apt/lists/*
 
 # 1、复制编译好的二进制文件、第三方库
