@@ -73,14 +73,6 @@ RUN cd /workspace/project/thirdparty/PoseLib \
     && make install \
     && ldconfig
 
-# 编译安装 igraph（COLMAP DAGSfM 模块依赖）
-# 从 COLMAP 源码中 bundled 的 thirdparty/igraph 编译安装
-RUN cd /workspace/project/thirdparty/colmap/src/thirdparty/igraph \
-    && autoreconf -fi \
-    && ./configure --prefix=/usr/local \
-    && make -j$(nproc) \
-    && make install \
-    && ldconfig
 
 # 编译安装 COLMAP
 # - CUDA 架构精简为 75(T4/V100)、80(A100/A30)、86(RTX30/40系)
