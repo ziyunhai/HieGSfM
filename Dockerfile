@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends cmake \
     && rm -rf /var/lib/apt/lists/*
 
-# 2、开启universe，安装全套编译开发依赖（builder这边正常装所有dev包）
+# 2、开启universe，安装全套编译开发依赖（移除 libjasper-dev）
 RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common \
     && add-apt-repository universe \
     && apt-get update \
@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     libboost-program-options-dev libboost-filesystem-dev libboost-graph-dev \
     libboost-regex-dev libboost-system-dev libboost-test-dev libboost-serialization-dev \
     libeigen3-dev libsuitesparse-dev libatlas-base-dev libblas-dev liblapack-dev libmetis-dev \
-    libceres-dev libfreeimage-dev libflann-dev libjasper-dev libgoogle-glog-dev libgflags-dev libglew-dev \
+    libceres-dev libfreeimage-dev libflann-dev libgoogle-glog-dev libgflags-dev libglew-dev \
     qtbase5-dev libqt5opengl5-dev libcgal-dev libcgal-qt5-dev libxml2-dev libomp-dev libsqlite3-dev libgtest-dev \
     autoconf automake libtool flex bison \
     && rm -rf /var/lib/apt/lists/*
@@ -102,7 +102,7 @@ ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/bin:$PATH
 WORKDIR /data
 
-# 仅安装基础运行时包，彻底移除 libjasper-dev/libcgal-dev/libflann-dev 等所有找不到的开发包
+# 仅安装基础运行时包，移除所有开发包（且不再需要 libjasper 相关）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -132,7 +132,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /usr/local/lib /usr/local/lib
 COPY --from=builder /usr/local/share /usr/local/share
 
-# 2、复制builder收集好的 jasper、cgal、flann 等缺失的系统so库
+# 2、复制builder收集好的缺失的系统so库（包括可能的 libjasper 等，如果存在）
 COPY --from=builder /tmp/deps_lib/* /usr/lib/x86_64-linux-gnu/
 
 # 3、复制Python运行环境
