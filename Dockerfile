@@ -1,5 +1,6 @@
 # ============================================================
-# HIE_GLOMAP Dockerfile - 多阶段构建
+# HIE_GLOMAP 多阶段构建 Dockerfile
+# 基础：CUDA 11.8 + cuDNN 8 + Ubuntu 20.04 + GCC 9
 # ============================================================
 
 # ====================== 第一阶段：编译构建 ======================
@@ -11,9 +12,7 @@ ENV CXX=g++-9
 
 WORKDIR /workspace
 
-# ------------------------------------------------------------
-# Step 1: 升级CMake到3.27+
-# ------------------------------------------------------------
+# 升级CMake到3.27+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     gnupg \
@@ -24,9 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends cmake \
     && rm -rf /var/lib/apt/lists/*
 
-# ------------------------------------------------------------
-# Step 2: 安装系统编译依赖
-# ------------------------------------------------------------
+# 安装系统编译依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ninja-build \
@@ -78,9 +75,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     g++-9 \
     && rm -rf /var/lib/apt/lists/*
 
-# ------------------------------------------------------------
-# Step 3: 安装Python三方依赖
-# ------------------------------------------------------------
+# 安装Python三方依赖
 RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir \
         scikit-learn \
@@ -88,26 +83,20 @@ RUN pip3 install --no-cache-dir --upgrade pip && \
         numpy \
         progressbar2
 
-# ------------------------------------------------------------
-# Step 4: 复制项目源码
-# ------------------------------------------------------------
+# 复制项目源码
 COPY . /workspace/project
 
-# ------------------------------------------------------------
-# Step 5: Git clone PoseLib到 thirdparty/PoseLib
-# ------------------------------------------------------------
+# 清空thirdparty目录，防止CI子模块残留冲突
 RUN rm -rf /workspace/project/thirdparty/PoseLib && \
-    git clone --recursive https://github.com/PoseLib/PoseLib.git /workspace/project/thirdparty/PoseLib
+    rm -rf /workspace/project/thirdparty/colmap
 
-# ------------------------------------------------------------
-# Step 6: Git clone COLMAP到 thirdparty/colmap
-# ------------------------------------------------------------
-RUN rm -rf /workspace/project/thirdparty/colmap && \
-    git clone --recursive https://github.com/colmap/colmap.git /workspace/project/thirdparty/colmap
+# 拉取PoseLib源码到thirdparty
+RUN git clone --recursive https://github.com/PoseLib/PoseLib.git /workspace/project/thirdparty/PoseLib
 
-# ------------------------------------------------------------
-# Step 7: 构建 thirdparty/PoseLib
-# ------------------------------------------------------------
+# 拉取COLMAP源码到thirdparty
+RUN git clone --recursive https://github.com/colmap/colmap.git /workspace/project/thirdparty/colmap
+
+# 构建PoseLib
 RUN cd /workspace/project/thirdparty/PoseLib && \
     mkdir -p build && cd build && \
     cmake .. \
@@ -117,9 +106,7 @@ RUN cd /workspace/project/thirdparty/PoseLib && \
     make -j$(nproc) && \
     make install
 
-# ------------------------------------------------------------
-# Step 8: 构建 thirdparty/colmap
-# ------------------------------------------------------------
+# 构建COLMAP
 RUN cd /workspace/project/thirdparty/colmap && \
     mkdir -p build && cd build && \
     cmake .. -GNinja \
@@ -131,9 +118,7 @@ RUN cd /workspace/project/thirdparty/colmap && \
     ninja -j$(nproc) && \
     ninja install
 
-# ------------------------------------------------------------
-# Step 9: 构建主项目 hie_glomap
-# ------------------------------------------------------------
+# 构建主项目hie_glomap
 RUN cd /workspace/project && \
     mkdir -p build && cd build && \
     cmake .. -GNinja \
@@ -162,9 +147,7 @@ ENV PATH=/usr/local/bin:$PATH
 
 WORKDIR /data
 
-# ------------------------------------------------------------
-# Step 1: 安装运行时依赖（仅运行时库，无-dev包）
-# ------------------------------------------------------------
+# 安装运行时依赖（仅运行时库，无-dev包）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -192,24 +175,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsqlite3-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# ------------------------------------------------------------
-# Step 2: 从builder阶段复制编译产物
-# ------------------------------------------------------------
+# 复制编译产物
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /usr/local/lib /usr/local/lib
 COPY --from=builder /usr/local/include /usr/local/include
 COPY --from=builder /usr/local/share /usr/local/share
 
-# ------------------------------------------------------------
-# Step 3: 复制Python三方包
-# ------------------------------------------------------------
+# 复制Python环境
 COPY --from=builder /usr/local/lib/python3.8/dist-packages /usr/local/lib/python3.8/dist-packages
 COPY --from=builder /usr/bin/python3 /usr/bin/python3
 COPY --from=builder /usr/bin/pip3 /usr/bin/pip3
 
 RUN ldconfig
 
-# ------------------------------------------------------------
-# 默认入口
-# ------------------------------------------------------------
 ENTRYPOINT ["hie_glomap"]
