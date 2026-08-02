@@ -1,6 +1,5 @@
 # ============================================================
 # HIE_GLOMAP 多阶段构建 Dockerfile
-# 基础：CUDA 11.8 + cuDNN 8 + Ubuntu 20.04 + GCC 9
 # ============================================================
 
 # ====================== 第一阶段：编译构建 ======================
@@ -147,7 +146,9 @@ ENV PATH=/usr/local/bin:$PATH
 
 WORKDIR /data
 
-# 安装运行时依赖（仅运行时库，无-dev包）
+# 安装运行时依赖
+# 说明：libjasper、libcgal、libflann运行时包名在Ubuntu 20.04中不统一，
+# 暂用-dev包保证依赖完整可用，后续可通过ldd排查精确裁剪
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -163,14 +164,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libatlas3-base \
     libceres1 \
     libfreeimage3 \
-    libflann1.9 \
-    libjasper1 \
+    libflann-dev \
+    libjasper-dev \
     libgoogle-glog0v5 \
     libgflags2.2 \
     libglew2.1 \
     libqt5opengl5 \
     libqt5widgets5 \
-    libcgal13 \
+    libcgal-dev \
     libxml2 \
     libsqlite3-0 \
     && rm -rf /var/lib/apt/lists/*
