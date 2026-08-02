@@ -15,10 +15,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends cmake \
     && rm -rf /var/lib/apt/lists/*
 
-# 2、开启universe，安装全套编译开发依赖
-#    新增：OpenImageIO（COLMAP 4.x 强制依赖）+ 修复其CMake配置bug
+# 2、安装全套编译开发依赖
+#    - 显式启用universe仓库
+#    - 安装OpenImageIO开发包（COLMAP 4.x强制依赖）
+#    - 创建opencv4空目录修复OpenImageIO的CMake配置bug
+#    - 验证OpenImageIO的CMake配置文件是否存在
 RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common \
-    && add-apt-repository universe \
+    && add-apt-repository -y universe \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
     build-essential ninja-build git pkg-config ccache \
@@ -32,6 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     autoconf automake libtool flex bison \
     libopenimageio-dev openimageio-tools \
     && mkdir -p /usr/include/opencv4 \
+    && dpkg -L libopenimageio-dev | grep -E '\.cmake$' \
     && rm -rf /var/lib/apt/lists/*
 
 # 3、安装Python业务依赖
@@ -59,9 +63,9 @@ RUN cd /workspace/project/thirdparty/PoseLib \
     && make install
 
 # 编译安装 COLMAP
-# 说明：COLMAP 4.x 已无 OpenImageIO_ENABLED 开关，该依赖为强制项，已在上方 apt 安装
-# 优化：精简 CUDA 架构，只保留主流算力 75(T4/V100)、80(A100/A30)、86(RTX30/40系)
-#       如需兼容更老显卡，可自行加回 35;50;52;60;61;70
+# 通过 CMAKE_PREFIX_PATH 显式指定 OpenImageIO 的 CMake 配置搜索路径
+# Ubuntu 20.04 的 OpenImageIO cmake 文件位于 /usr/lib/x86_64-linux-gnu/cmake/OpenImageIO/
+# 精简 CUDA 架构：75(T4/V100)、80(A100/A30)、86(RTX30/40系)
 RUN cd /workspace/project/thirdparty/colmap \
     && mkdir build && cd build \
     && cmake .. -GNinja \
@@ -70,6 +74,7 @@ RUN cd /workspace/project/thirdparty/colmap \
         -DGUI_ENABLED=ON \
         -DCMAKE_CUDA_ARCHITECTURES="75;80;86" \
         -DCMAKE_CUDA_FLAGS="-Wno-deprecated-declarations" \
+        -DCMAKE_PREFIX_PATH="/usr/lib/x86_64-linux-gnu/cmake/OpenImageIO;${CMAKE_PREFIX_PATH}" \
     && ninja -j$(nproc) \
     && ninja install
 
@@ -108,8 +113,7 @@ ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/bin:$PATH
 WORKDIR /data
 
-# 仅安装基础运行时包
-# 新增：OpenImageIO 运行时库
+# 安装基础运行时包
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
