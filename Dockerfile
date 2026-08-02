@@ -1,58 +1,45 @@
-# ======================== 构建阶段 builder ========================
-FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu20.04 AS builder
+# syntax=docker/dockerfile:1
+
+# 建议使用 Ubuntu 22.04，它的 libopenimageio-dev 原生包含 CMake Config 文件
+# 如果你的显卡驱动支持，也可以直接将 11.8.0 改为 12.2.0，将 22.04 改为 24.04
+FROM nvidia/cuda:11.8.0-devel-ubuntu22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV CC=gcc-9
-ENV CXX=g++-9
-WORKDIR /workspace
-
-# ccache 配置（加速增量构建）
-ENV CCACHE_DIR=/workspace/ccache
+ENV CC=gcc-11
+ENV CXX=g++-11
+ENV QT_XCB_GL_INTEGRATION=xcb_egl
+ENV CCACHE_DIR=/workspace/build/.ccache
 ENV CCACHE_BASEDIR=/workspace
+
+WORKDIR /workspace
 
 # 0、替换为阿里云apt源，国内构建加速
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
-    sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
-    find /etc/apt/sources.list.d/ -name "*.list" -exec sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' {} \; && \
-    find /etc/apt/sources.list.d/ -name "*.list" -exec sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' {} \;
+    sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 1、安装Kitware官方新版CMake
+# 1、安装编译依赖 (参考官方 COLMAP Dockerfile 精简优化)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget gnupg ca-certificates \
-    && wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor -o /usr/share/keyrings/kitware-archive-keyring.gpg \
-    && echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ focal main' > /etc/apt/sources.list.d/kitware.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends cmake \
-    && rm -rf /var/lib/apt/lists/*
-
-# 2、安装全套编译开发依赖
-#    - OpenImageIO：COLMAP 4.x 强制依赖
-#    - curl/ssl：COLMAP 下载功能必需
-#    - autotools/bison/flex：igraph 编译依赖
-RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common \
-    && add-apt-repository -y universe \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-    build-essential ninja-build git pkg-config ccache \
+    ccache cmake ninja-build build-essential git \
     python3-dev python3-pip python3-numpy python3-scipy \
-    gcc-9 g++-9 \
-    libboost-program-options-dev libboost-filesystem-dev libboost-graph-dev \
-    libboost-regex-dev libboost-system-dev libboost-test-dev libboost-serialization-dev \
-    libeigen3-dev libsuitesparse-dev libatlas-base-dev libblas-dev liblapack-dev libmetis-dev \
-    libceres-dev libfreeimage-dev libflann-dev libgoogle-glog-dev libgflags-dev libglew-dev \
-    qtbase5-dev libqt5opengl5-dev libcgal-dev libcgal-qt5-dev libxml2-dev libomp-dev libsqlite3-dev libgtest-dev \
-    autoconf automake libtool flex bison \
+    libboost-program-options-dev libboost-filesystem-dev libboost-graph-dev libboost-system-dev \
+    libeigen3-dev libsuitesparse-dev libmetis-dev \
+    libceres-dev libgoogle-glog-dev libgflags-dev libgtest-dev libgmock-dev \
     libopenimageio-dev openimageio-tools \
-    libcurl4-openssl-dev libssl-dev \
-    && mkdir -p /usr/include/opencv4 \
+    libcurl4-openssl-dev libssl-dev libsqlite3-dev \
+    qt6-base-dev libqt6opengl6-dev libqt6openglwidgets6-dev \
+    libcgal-dev libomp-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 3、安装Python业务依赖
-RUN pip3 install --no-cache-dir --upgrade pip \
-    && pip3 install --no-cache-dir scikit-learn scipy numpy progressbar2
+# 2、【官方关键修复】解决 Ubuntu 的 openimageio CMake config 错误强依赖 OpenCV 头文件的问题
+RUN mkdir -p /usr/include/opencv4
 
-# 4、导入项目源码
+# 3、安装 Python 业务依赖
+RUN pip3 install --no-cache-dir --upgrade pip && \
+    pip3 install --no-cache-dir scikit-learn scipy numpy progressbar2
+
+# 4、导入项目源码并准备第三方库
 COPY . /workspace/project
+WORKDIR /workspace/project
 
 # 清理本地第三方目录，避免子模块冲突
 RUN rm -rf /workspace/project/thirdparty/PoseLib /workspace/project/thirdparty/colmap
@@ -61,40 +48,33 @@ RUN rm -rf /workspace/project/thirdparty/PoseLib /workspace/project/thirdparty/c
 RUN git clone --recursive https://github.com/PoseLib/PoseLib.git /workspace/project/thirdparty/PoseLib
 RUN git clone --recursive https://github.com/colmap/colmap.git /workspace/project/thirdparty/colmap
 
-# 编译安装 PoseLib
-RUN cd /workspace/project/thirdparty/PoseLib \
-    && mkdir build && cd build \
-    && cmake .. \
+# 5、编译安装 PoseLib
+RUN cd /workspace/project/thirdparty/PoseLib && \
+    mkdir -p build && cd build && \
+    cmake .. -GNinja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CXX_STANDARD=17 \
-        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-    && make -j$(nproc) \
-    && make install \
-    && ldconfig
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON && \
+    ninja install && \
+    ldconfig
 
-# 编译安装 COLMAP
-# - CUDA 架构精简为 75(T4/V100)、80(A100/A30)、86(RTX30/40系)
-# - 【关键修复】通过 CMAKE_MODULE_PATH 加载系统内置 FindOpenImageIO.cmake
-#   Ubuntu 20.04 的 libopenimageio-dev 不提供 OpenImageIOConfig.cmake，
-#   只有老式 Find 模块，需显式指定模块路径让 CMake 以 MODULE 模式查找
-RUN cd /workspace/project/thirdparty/colmap \
-    && mkdir -p build/.ccache \
-    && cd build \
-    && cmake .. -GNinja \
+# 6、编译安装 COLMAP (移除了多余的 CMAKE_MODULE_PATH，现代系统可自动找到 OIIO)
+RUN cd /workspace/project/thirdparty/colmap && \
+    mkdir -p build/.ccache && cd build && \
+    cmake .. -GNinja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCUDA_ENABLED=ON \
         -DGUI_ENABLED=ON \
         -DCMAKE_CUDA_ARCHITECTURES="75;80;86" \
         -DCMAKE_CUDA_FLAGS="-Wno-deprecated-declarations" \
-        -DCMAKE_MODULE_PATH="/usr/share/cmake-3.16/Modules" \
-    && ninja -j$(nproc) \
-    && ninja install \
-    && ldconfig
+        -DCMAKE_INSTALL_PREFIX=/usr/local && \
+    ninja install && \
+    ldconfig
 
-# 编译自身业务程序 hie_glomap
-RUN cd /workspace/project \
-    && mkdir build && cd build \
-    && cmake .. -GNinja \
+# 7、编译自身业务程序 hie_glomap
+RUN cd /workspace/project && \
+    mkdir -p build && cd build && \
+    cmake .. -GNinja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CXX_STANDARD=17 \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
@@ -106,69 +86,46 @@ RUN cd /workspace/project \
         -DCUDA_ENABLED=ON \
         -DCMAKE_CUDA_ARCHITECTURES="75;80;86" \
         -DCMAKE_CUDA_FLAGS="-Wno-deprecated-declarations" \
-    && ninja -j$(nproc) \
-    && ninja install \
-    && ldconfig
+        -DCMAKE_INSTALL_PREFIX=/usr/local && \
+    ninja install && \
+    ldconfig
 
-# 收集程序运行依赖的全部系统动态库，打包存放
-RUN mkdir -p /tmp/deps_lib && \
-    ldd /usr/local/bin/hie_glomap /usr/local/bin/colmap \
-        | awk '/=> \/lib|=> \/usr\/lib/ {print $3}' \
-        | sort -u \
-        | xargs cp -t /tmp/deps_lib/ 2>/dev/null || true
 
 # ======================== 运行时阶段 runtime ========================
-FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu20.04 AS runtime
+# 使用对应的 runtime 镜像
+FROM nvidia/cuda:11.8.0-runtime-ubuntu22.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/bin:$PATH
 WORKDIR /data
 
-# 阿里云apt源
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 安装基础运行时包
+# 安装基础运行时包 (参考官方，仅安装必要的 .so 运行时版本)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 \
-    python3-pip \
-    python3-distutils \
-    libboost-program-options1.71.0 \
-    libboost-filesystem1.71.0 \
-    libboost-graph1.71.0 \
-    libboost-regex1.71.0 \
-    libboost-system1.71.0 \
-    libboost-serialization1.71.0 \
-    libgomp1 \
-    libblas3 \
-    liblapack3 \
-    libatlas3-base \
+    python3 python3-pip \
+    libboost-program-options1.74.0 \
+    libboost-filesystem1.74.0 \
+    libboost-graph1.74.0 \
+    libboost-system1.74.0 \
+    libeigen3-dev \
     libceres1 \
-    libfreeimage3 \
     libgoogle-glog0v5 \
     libgflags2.2 \
-    libglew2.1 \
-    libqt5opengl5 \
-    libqt5widgets5 \
-    libxml2 \
+    libopenimageio2.3 \
+    libcurl4 libssl3 \
     libsqlite3-0 \
-    libopenimageio2.1 \
-    libcurl4 \
-    libssl1.1 \
-    && rm -rf /var/lib/apt/lists/*
+    libomp5 \
+    libmetis5 \
+    libqt6core6 libqt6gui6 libqt6widgets6 libqt6openglwidgets6 \
+    libcgal16 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# 1、复制编译好的二进制文件、第三方库
-COPY --from=builder /usr/local/bin /usr/local/bin
-COPY --from=builder /usr/local/lib /usr/local/lib
-COPY --from=builder /usr/local/share /usr/local/share
-
-# 2、复制builder收集好的所有系统动态库
-COPY --from=builder /tmp/deps_lib/* /usr/lib/x86_64-linux-gnu/
-
-# 3、复制Python运行环境（标准库 + 第三方包）
-COPY --from=builder /usr/lib/python3.8 /usr/lib/python3.8
-COPY --from=builder /usr/local/lib/python3.8 /usr/local/lib/python3.8
+# 【官方最佳实践】直接复制 builder 阶段安装到 /usr/local 的所有文件
+# 这比手动用 ldd 抓取动态库安全、可靠得多，且能保留 CMake 配置文件
+COPY --from=builder /usr/local/ /usr/local/
 
 # 刷新动态链接缓存
 RUN ldconfig
