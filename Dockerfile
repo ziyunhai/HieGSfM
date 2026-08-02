@@ -45,7 +45,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     libopenimageio-dev openimageio-tools \
     libcurl4-openssl-dev libssl-dev \
     && mkdir -p /usr/include/opencv4 \
-    && dpkg -L libopenimageio-dev | grep -E '\.cmake$' || true \
     && rm -rf /var/lib/apt/lists/*
 
 # 3、安装Python业务依赖
@@ -73,10 +72,11 @@ RUN cd /workspace/project/thirdparty/PoseLib \
     && make install \
     && ldconfig
 
-
 # 编译安装 COLMAP
 # - CUDA 架构精简为 75(T4/V100)、80(A100/A30)、86(RTX30/40系)
-# - CMAKE_PREFIX_PATH 兜底指定 OpenImageIO CMake 路径
+# - 【关键修复】通过 CMAKE_MODULE_PATH 加载系统内置 FindOpenImageIO.cmake
+#   Ubuntu 20.04 的 libopenimageio-dev 不提供 OpenImageIOConfig.cmake，
+#   只有老式 Find 模块，需显式指定模块路径让 CMake 以 MODULE 模式查找
 RUN cd /workspace/project/thirdparty/colmap \
     && mkdir -p build/.ccache \
     && cd build \
@@ -86,7 +86,7 @@ RUN cd /workspace/project/thirdparty/colmap \
         -DGUI_ENABLED=ON \
         -DCMAKE_CUDA_ARCHITECTURES="75;80;86" \
         -DCMAKE_CUDA_FLAGS="-Wno-deprecated-declarations" \
-        -DCMAKE_PREFIX_PATH="/usr/lib/x86_64-linux-gnu/cmake/OpenImageIO;${CMAKE_PREFIX_PATH}" \
+        -DCMAKE_MODULE_PATH="/usr/share/cmake-3.16/Modules" \
     && ninja -j$(nproc) \
     && ninja install \
     && ldconfig
@@ -133,6 +133,7 @@ RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
+    python3-distutils \
     libboost-program-options1.71.0 \
     libboost-filesystem1.71.0 \
     libboost-graph1.71.0 \
@@ -165,10 +166,9 @@ COPY --from=builder /usr/local/share /usr/local/share
 # 2、复制builder收集好的所有系统动态库
 COPY --from=builder /tmp/deps_lib/* /usr/lib/x86_64-linux-gnu/
 
-# 3、复制Python运行环境
-COPY --from=builder /usr/local/lib/python3.8/dist-packages /usr/local/lib/python3.8/dist-packages
-COPY --from=builder /usr/bin/python3 /usr/bin/python3
-COPY --from=builder /usr/bin/pip3 /usr/bin/pip3
+# 3、复制Python运行环境（标准库 + 第三方包）
+COPY --from=builder /usr/lib/python3.8 /usr/lib/python3.8
+COPY --from=builder /usr/local/lib/python3.8 /usr/local/lib/python3.8
 
 # 刷新动态链接缓存
 RUN ldconfig
