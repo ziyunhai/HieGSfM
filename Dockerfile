@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends cmake \
     && rm -rf /var/lib/apt/lists/*
 
-# 2、开启universe，安装全套编译开发依赖（移除libjasper-dev，新增libopenimageio-dev）
+# 2、开启universe，安装全套编译开发依赖（移除了 libjasper-dev 和 libopenimageio-dev）
 RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common \
     && add-apt-repository universe \
     && apt-get update \
@@ -29,7 +29,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends software-proper
     libceres-dev libfreeimage-dev libflann-dev libgoogle-glog-dev libgflags-dev libglew-dev \
     qtbase5-dev libqt5opengl5-dev libcgal-dev libcgal-qt5-dev libxml2-dev libomp-dev libsqlite3-dev libgtest-dev \
     autoconf automake libtool flex bison \
-    libopenimageio-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # 3、安装Python业务依赖
@@ -56,13 +55,14 @@ RUN cd /workspace/project/thirdparty/PoseLib \
     && make -j$(nproc) \
     && make install
 
-# 编译安装 COLMAP（OpenImageIO 已安装，不会再报错）
+# 编译安装 COLMAP（禁用 OpenImageIO，避免依赖问题）
 RUN cd /workspace/project/thirdparty/colmap \
     && mkdir build && cd build \
     && cmake .. -GNinja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCUDA_ENABLED=ON \
         -DGUI_ENABLED=ON \
+        -DOpenImageIO_ENABLED=OFF \
         -DCMAKE_CUDA_ARCHITECTURES="35;50;52;60;61;70;75;80;86" \
         -DCMAKE_CUDA_FLAGS="-Wno-deprecated-declarations" \
     && ninja -j$(nproc) \
@@ -103,7 +103,7 @@ ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/bin:$PATH
 WORKDIR /data
 
-# 仅安装基础运行时包（OpenImageIO 运行时库会被 builder 收集并复制）
+# 仅安装基础运行时包（无需 OpenImageIO 相关）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -133,7 +133,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /usr/local/lib /usr/local/lib
 COPY --from=builder /usr/local/share /usr/local/share
 
-# 2、复制builder收集好的所有系统动态库（包括 OpenImageIO 等）
+# 2、复制builder收集好的所有系统动态库
 COPY --from=builder /tmp/deps_lib/* /usr/lib/x86_64-linux-gnu/
 
 # 3、复制Python运行环境
