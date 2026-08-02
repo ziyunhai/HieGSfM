@@ -1,4 +1,8 @@
-# ====================== 第一阶段：编译构建阶段 builder ======================
+# ============================================================
+# HIE_GLOMAP Dockerfile - 多阶段构建
+# ============================================================
+
+# ====================== 第一阶段：编译构建 ======================
 FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu20.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -7,18 +11,33 @@ ENV CXX=g++-9
 
 WORKDIR /workspace
 
-# 1. 系统全套编译依赖，使用apt直接安装libceres-dev
+# ------------------------------------------------------------
+# Step 1: 升级CMake到3.27+
+# ------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3-pip \
+    wget \
+    gnupg \
+    ca-certificates \
+    && wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null \
+    && echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ focal main' | tee /etc/apt/sources.list.d/kitware.list >/dev/null \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends cmake \
+    && rm -rf /var/lib/apt/lists/*
+
+# ------------------------------------------------------------
+# Step 2: 安装系统编译依赖
+# ------------------------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ninja-build \
+    git \
+    pkg-config \
+    ccache \
+    vim \
     python3-dev \
+    python3-pip \
     python3-numpy \
     python3-scipy \
-    git \
-    cmake \
-    vim \
-    wget \
-    build-essential \
-    pkg-config \
     libboost-program-options-dev \
     libboost-filesystem-dev \
     libboost-graph-dev \
@@ -28,12 +47,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libboost-serialization-dev \
     libboost-heap-dev \
     libboost-property-tree-dev \
+    libboost-property-map-dev \
     libeigen3-dev \
     libsuitesparse-dev \
     libatlas-base-dev \
     libblas-dev \
     liblapack-dev \
     libmetis-dev \
+    libceres-dev \
     libfreeimage-dev \
     libflann-dev \
     libjasper-dev \
@@ -47,14 +68,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxml2-dev \
     libomp-dev \
     libsqlite3-dev \
-    autoconf automake libtool flex bison gcc-9 g++-9 \
     libgtest-dev \
-    ninja-build \
-    ccache \
-    libceres-dev \
+    autoconf \
+    automake \
+    libtool \
+    flex \
+    bison \
+    gcc-9 \
+    g++-9 \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Python三方依赖安装
+# ------------------------------------------------------------
+# Step 3: 安装Python三方依赖
+# ------------------------------------------------------------
 RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir \
         scikit-learn \
@@ -62,27 +88,59 @@ RUN pip3 install --no-cache-dir --upgrade pip && \
         numpy \
         progressbar2
 
-# 3. 编译安装 PoseLib
-RUN git clone --recursive https://github.com/PoseLib/PoseLib.git /tmp/PoseLib && \
-    cd /tmp/PoseLib && \
-    mkdir build && cd build && \
-    cmake .. \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_CXX_STANDARD=17 && \
-    make -j$(nproc) && \
-    make install && \
-    rm -rf /tmp/PoseLib
-
-# 4. 复制项目源码
+# ------------------------------------------------------------
+# Step 4: 复制项目源码
+# ------------------------------------------------------------
 COPY . /workspace/project
 
-# 5. 构建主项目GLOMAP/HIE_GLOMAP
+# ------------------------------------------------------------
+# Step 5: Git clone PoseLib到 thirdparty/PoseLib
+# ------------------------------------------------------------
+RUN rm -rf /workspace/project/thirdparty/PoseLib && \
+    git clone --recursive https://github.com/PoseLib/PoseLib.git /workspace/project/thirdparty/PoseLib
+
+# ------------------------------------------------------------
+# Step 6: Git clone COLMAP到 thirdparty/colmap
+# ------------------------------------------------------------
+RUN rm -rf /workspace/project/thirdparty/colmap && \
+    git clone --recursive https://github.com/colmap/colmap.git /workspace/project/thirdparty/colmap
+
+# ------------------------------------------------------------
+# Step 7: 构建 thirdparty/PoseLib
+# ------------------------------------------------------------
+RUN cd /workspace/project/thirdparty/PoseLib && \
+    mkdir -p build && cd build && \
+    cmake .. \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CXX_STANDARD=17 \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON && \
+    make -j$(nproc) && \
+    make install
+
+# ------------------------------------------------------------
+# Step 8: 构建 thirdparty/colmap
+# ------------------------------------------------------------
+RUN cd /workspace/project/thirdparty/colmap && \
+    mkdir -p build && cd build && \
+    cmake .. -GNinja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCUDA_ENABLED=ON \
+        -DGUI_ENABLED=ON \
+        -DCMAKE_CUDA_ARCHITECTURES="35;50;52;60;61;70;75;80;86" \
+        -DCMAKE_CUDA_FLAGS="-Wno-deprecated-declarations" && \
+    ninja -j$(nproc) && \
+    ninja install
+
+# ------------------------------------------------------------
+# Step 9: 构建主项目 hie_glomap
+# ------------------------------------------------------------
 RUN cd /workspace/project && \
-    mkdir build && cd build && \
+    mkdir -p build && cd build && \
     cmake .. -GNinja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_CXX_STANDARD=17 \
-        -DFETCH_COLMAP=ON \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DFETCH_COLMAP=OFF \
         -DFETCH_POSELIB=OFF \
         -DTESTS_ENABLED=OFF \
         -DASAN_ENABLED=OFF \
@@ -90,60 +148,68 @@ RUN cd /workspace/project && \
         -DCUDA_ENABLED=ON \
         -DCMAKE_CUDA_ARCHITECTURES="35;50;52;60;61;70;75;80;86" \
         -DCMAKE_CUDA_FLAGS="-Wno-deprecated-declarations" && \
-    ninja && \
+    ninja -j$(nproc) && \
     ninja install
 
 RUN ldconfig
 
-# ====================== 第二阶段：运行时镜像 runtime ======================
+# ====================== 第二阶段：运行时镜像 ======================
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu20.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+ENV PATH=/usr/local/bin:$PATH
 
+WORKDIR /data
+
+# ------------------------------------------------------------
+# Step 1: 安装运行时依赖（仅运行时库，无-dev包）
+# ------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
-    libboost-program-options-dev \
-    libboost-filesystem-dev \
-    libboost-graph-dev \
-    libboost-regex-dev \
-    libboost-system-dev \
-    libboost-serialization-dev \
-    libeigen3-dev \
-    libsuitesparse-dev \
-    libatlas-base-dev \
-    libblas-dev \
-    liblapack-dev \
-    libfreeimage-dev \
-    libflann-dev \
-    libjasper-dev \
-    libgoogle-glog-dev \
-    libgflags-dev \
-    libglew-dev \
-    qtbase5-dev \
-    libqt5opengl5-dev \
-    libcgal-dev \
-    libcgal-qt5-dev \
-    libxml2-dev \
-    libomp-dev \
+    libboost-program-options1.71.0 \
+    libboost-filesystem1.71.0 \
+    libboost-graph1.71.0 \
+    libboost-regex1.71.0 \
+    libboost-system1.71.0 \
+    libboost-serialization1.71.0 \
+    libgomp1 \
+    libblas3 \
+    liblapack3 \
+    libatlas3-base \
+    libceres1 \
+    libfreeimage3 \
+    libflann1.9 \
+    libjasper1 \
+    libgoogle-glog0v5 \
+    libgflags2.2 \
+    libglew2.1 \
+    libqt5opengl5 \
+    libqt5widgets5 \
+    libcgal13 \
+    libxml2 \
     libsqlite3-0 \
-    libceres-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /usr/local/lib /usr/local/lib
+# ------------------------------------------------------------
+# Step 2: 从builder阶段复制编译产物
+# ------------------------------------------------------------
 COPY --from=builder /usr/local/bin /usr/local/bin
+COPY --from=builder /usr/local/lib /usr/local/lib
 COPY --from=builder /usr/local/include /usr/local/include
 COPY --from=builder /usr/local/share /usr/local/share
 
+# ------------------------------------------------------------
+# Step 3: 复制Python三方包
+# ------------------------------------------------------------
 COPY --from=builder /usr/local/lib/python3.8/dist-packages /usr/local/lib/python3.8/dist-packages
 COPY --from=builder /usr/bin/python3 /usr/bin/python3
 COPY --from=builder /usr/bin/pip3 /usr/bin/pip3
 
 RUN ldconfig
 
-ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
-ENV PATH=/usr/local/bin:$PATH
-
-WORKDIR /data
-
-ENTRYPOINT ["glomap"]
+# ------------------------------------------------------------
+# 默认入口
+# ------------------------------------------------------------
+ENTRYPOINT ["hie_glomap"]
