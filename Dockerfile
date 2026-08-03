@@ -79,13 +79,14 @@ WORKDIR /data
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
+# 安装运行时依赖 (包名已严格校准为 Ubuntu 22.04 官方仓库真实名称)
 RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common && \
     add-apt-repository -y universe && apt-get update && \
     apt-get install -y --no-install-recommends \
     python3 python3-pip \
     libboost-program-options1.74.0 libboost-filesystem1.74.0 libboost-graph1.74.0 libboost-system1.74.0 \
     libceres2 libgoogle-glog0v5 libgflags2.2 \
-    libopenexr-3-1-25 \
+    libopenexr25 \
     libtiff5 libjpeg8 libpng16-16 \
     libcurl4 libssl3 libsqlite3-0 libomp5 libmetis5 \
     libqt6core6 libqt6gui6 libqt6widgets6 libqt6openglwidgets6 \
