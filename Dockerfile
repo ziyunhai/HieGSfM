@@ -13,14 +13,14 @@ WORKDIR /workspace
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 安装基础编译依赖 (补充了 tiff/jpeg/png 开发包，确保 OIIO 源码编译顺利)
+# 安装基础编译依赖 (移除 libimath-dev，由 libopenexr-dev 自动处理依赖，避免冲突)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ccache cmake ninja-build build-essential git \
     python3-dev python3-pip python3-numpy python3-scipy \
     libboost-program-options-dev libboost-filesystem-dev libboost-graph-dev libboost-system-dev \
     libeigen3-dev libsuitesparse-dev libmetis-dev \
     libceres-dev libgoogle-glog-dev libgflags-dev libgtest-dev libgmock-dev \
-    libopenexr-dev libimath-dev libtiff-dev libjpeg-dev libpng-dev \
+    libopenexr-dev libtiff-dev libjpeg-dev libpng-dev \
     libcurl4-openssl-dev libssl-dev libsqlite3-dev \
     qt6-base-dev libqt6opengl6-dev libcgal-dev libomp-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -86,14 +86,14 @@ WORKDIR /data
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 安装运行时依赖 (补充了 tiff/jpeg/png 运行时库，配合 /usr/local 下的 OIIO)
+# 安装运行时依赖 (同样移除 libimath 显式声明，由 libopenexr 自动拉取)
 RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common && \
     add-apt-repository -y universe && apt-get update && \
     apt-get install -y --no-install-recommends \
     python3 python3-pip \
     libboost-program-options1.74.0 libboost-filesystem1.74.0 libboost-graph1.74.0 libboost-system1.74.0 \
     libceres2 libgoogle-glog0v5 libgflags2.2 \
-    libopenexr-3-1-30 libimath-3-1-29 \
+    libopenexr-3-1-30 \
     libtiff6 libjpeg8 libpng16-16 \
     libcurl4 libssl3 libsqlite3-0 libomp5 libmetis5 \
     libqt6core6 libqt6gui6 libqt6widgets6 libqt6openglwidgets6 \
