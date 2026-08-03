@@ -13,19 +13,21 @@ WORKDIR /workspace
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
+# 安装基础编译依赖 (移除了 libopenexr-dev，交由 OIIO 自动构建匹配的版本)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ccache cmake ninja-build build-essential git \
     python3-dev python3-pip python3-numpy python3-scipy \
     libboost-program-options-dev libboost-filesystem-dev libboost-graph-dev libboost-system-dev \
     libeigen3-dev libsuitesparse-dev libmetis-dev \
     libceres-dev libgoogle-glog-dev libgflags-dev libgtest-dev libgmock-dev \
-    libopenexr-dev libtiff-dev libjpeg-dev libpng-dev \
+    libtiff-dev libjpeg-dev libpng-dev \
     libcurl4-openssl-dev libssl-dev libsqlite3-dev \
     qt6-base-dev libqt6opengl6-dev libcgal-dev libomp-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /usr/include/opencv4
 
+# 从源码编译 OpenImageIO (启用自动构建缺失依赖，彻底避开 Ubuntu 包冲突)
 RUN git clone --depth 1 --branch v3.1.16.0 https://github.com/AcademySoftwareFoundation/OpenImageIO.git /tmp/oiio && \
     cd /tmp/oiio && mkdir build && cd build && \
     cmake .. -GNinja \
@@ -34,7 +36,8 @@ RUN git clone --depth 1 --branch v3.1.16.0 https://github.com/AcademySoftwareFou
         -DUSE_PYTHON=OFF \
         -DBUILD_SHARED_LIBS=ON \
         -DUSE_OPENGL=OFF \
-        -DUSE_OPENCV=OFF && \
+        -DUSE_OPENCV=OFF \
+        -DOpenImageIO_BUILD_MISSING_DEPS=required && \
     ninja install && \
     rm -rf /tmp/oiio && \
     ldconfig
@@ -79,19 +82,19 @@ WORKDIR /data
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 安装运行时依赖 (包名已严格校准为 Ubuntu 22.04 官方仓库真实名称)
+# 安装运行时依赖 (已移除 libopenexr，因为 OIIO 编译的版本会随 /usr/local 一起复制过来)
 RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common && \
     add-apt-repository -y universe && apt-get update && \
     apt-get install -y --no-install-recommends \
     python3 python3-pip \
     libboost-program-options1.74.0 libboost-filesystem1.74.0 libboost-graph1.74.0 libboost-system1.74.0 \
     libceres2 libgoogle-glog0v5 libgflags2.2 \
-    libopenexr25 \
     libtiff5 libjpeg8 libpng16-16 \
     libcurl4 libssl3 libsqlite3-0 libomp5 libmetis5 \
     libqt6core6 libqt6gui6 libqt6widgets6 libqt6openglwidgets6 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# 复制编译产物 (包含 OIIO 自动构建的 Imath/OpenEXR 3.x，以及 COLMAP 和业务程序)
 COPY --from=builder /usr/local/ /usr/local/
 
 RUN ldconfig
