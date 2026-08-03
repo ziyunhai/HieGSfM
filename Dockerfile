@@ -13,7 +13,6 @@ WORKDIR /workspace
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 安装基础编译依赖 (移除 libimath-dev，由 libopenexr-dev 自动处理依赖，避免冲突)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ccache cmake ninja-build build-essential git \
     python3-dev python3-pip python3-numpy python3-scipy \
@@ -25,10 +24,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     qt6-base-dev libqt6opengl6-dev libcgal-dev libomp-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 修复 OIIO CMake 强依赖 OpenCV 头文件的问题
 RUN mkdir -p /usr/include/opencv4
 
-# 从源码编译 OpenImageIO (使用官方新地址和最新稳定版 v3.1.16.0)
 RUN git clone --depth 1 --branch v3.1.16.0 https://github.com/AcademySoftwareFoundation/OpenImageIO.git /tmp/oiio && \
     cd /tmp/oiio && mkdir build && cd build && \
     cmake .. -GNinja \
@@ -42,23 +39,20 @@ RUN git clone --depth 1 --branch v3.1.16.0 https://github.com/AcademySoftwareFou
     rm -rf /tmp/oiio && \
     ldconfig
 
-# 安装 Python 依赖
 RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir scikit-learn scipy numpy progressbar2
 
-# 准备源码
 COPY . /workspace/project
 WORKDIR /workspace/project
+
 RUN rm -rf /workspace/project/thirdparty/PoseLib /workspace/project/thirdparty/colmap
 RUN git clone --recursive https://github.com/PoseLib/PoseLib.git /workspace/project/thirdparty/PoseLib
 RUN git clone --recursive https://github.com/colmap/colmap.git /workspace/project/thirdparty/colmap
 
-# 编译安装 PoseLib
 RUN cd /workspace/project/thirdparty/PoseLib && mkdir -p build && cd build && \
     cmake .. -GNinja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=17 -DCMAKE_POSITION_INDEPENDENT_CODE=ON && \
     ninja install && ldconfig
 
-# 编译安装 COLMAP (显式指定源码编译的 OpenImageIO 路径)
 RUN cd /workspace/project/thirdparty/colmap && mkdir -p build/.ccache && cd build && \
     cmake .. -GNinja -DCMAKE_BUILD_TYPE=Release -DCUDA_ENABLED=ON -DGUI_ENABLED=ON \
         -DCMAKE_CUDA_ARCHITECTURES="75;80;86" -DCMAKE_CUDA_FLAGS="-Wno-deprecated-declarations" \
@@ -66,7 +60,6 @@ RUN cd /workspace/project/thirdparty/colmap && mkdir -p build/.ccache && cd buil
         -DOpenImageIO_DIR=/usr/local/lib/cmake/OpenImageIO && \
     ninja install && ldconfig
 
-# 编译安装业务程序 hie_glomap
 RUN cd /workspace/project && mkdir -p build && cd build && \
     cmake .. -GNinja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=17 -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DFETCH_COLMAP=OFF -DFETCH_POSELIB=OFF -DTESTS_ENABLED=OFF -DASAN_ENABLED=OFF \
@@ -86,20 +79,18 @@ WORKDIR /data
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 安装运行时依赖 (同样移除 libimath 显式声明，由 libopenexr 自动拉取)
 RUN apt-get update && apt-get install -y --no-install-recommends software-properties-common && \
     add-apt-repository -y universe && apt-get update && \
     apt-get install -y --no-install-recommends \
     python3 python3-pip \
     libboost-program-options1.74.0 libboost-filesystem1.74.0 libboost-graph1.74.0 libboost-system1.74.0 \
     libceres2 libgoogle-glog0v5 libgflags2.2 \
-    libopenexr-3-1-30 \
-    libtiff6 libjpeg8 libpng16-16 \
+    libopenexr-3-1-25 \
+    libtiff5 libjpeg8 libpng16-16 \
     libcurl4 libssl3 libsqlite3-0 libomp5 libmetis5 \
     libqt6core6 libqt6gui6 libqt6widgets6 libqt6openglwidgets6 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# 复制编译产物 (包含源码编译的 OIIO、COLMAP 及业务程序)
 COPY --from=builder /usr/local/ /usr/local/
 
 RUN ldconfig
