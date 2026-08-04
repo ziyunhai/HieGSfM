@@ -124,13 +124,13 @@ WORKDIR /data
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 仅安装运行必需系统库，同步带上OpenEXR、Imath运行时库
-RUN apt-get update && apt-get install -y --no-install-recommends --no-install-suggests \
+# 仅安装运行必需系统库，修正Ubuntu22.04正确EXR/Imath运行库包名
+RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-install-recommends --no-install-suggests \
     python3 python3-pip \
     libboost-program-options1.74.0 libboost-filesystem1.74.0 libboost-graph1.74.0 libboost-system1.74.0 \
     libceres2 libgoogle-glog0v5 libgflags2.2 \
     libtiff5 libjpeg8 libpng16-16 zlib1g \
-    libopenexr3 libimath3 \
+    libopenexr25 libimath25 \
     libcurl4 libssl3 libsqlite3-0 libomp5 libmetis5 \
     libqt6core6 libqt6gui6 libqt6widgets6 libqt6openglwidgets6 \
     libc6 libgcc-s1 libgl1 libopengl0 \
