@@ -22,6 +22,7 @@ WORKDIR /workspace
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
+# 关键修复：移除 libimath-dev，解决与libilmbase-dev冲突
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ccache cmake ninja-build build-essential git curl wget tar unzip \
     python3-dev python3-pip python3-numpy python3-scipy \
@@ -29,7 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libeigen3-dev libsuitesparse-dev libmetis-dev \
     libceres-dev libgoogle-glog-dev libgflags-dev libgtest-dev libgmock-dev \
     libtiff-dev libjpeg-dev libpng-dev zlib1g-dev \
-    libopenexr-dev libimath-dev \
+    libopenexr-dev \
     libcurl4-openssl-dev libssl-dev libsqlite3-dev \
     libomp-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -50,7 +51,6 @@ RUN git clone --depth 1 --branch v3.2.0.2-dev https://github.com/AcademySoftware
     -DUSE_OCIO=OFF \
     -DOpenImageIO_BUILD_MISSING_DEPS=none \
     -DOpenEXR_ROOT=/usr \
-    -DImath_ROOT=/usr \
     -DSTOP_ON_WARNING=OFF \
     -DEMBEDPLUGINS=1 \
     && ninja install \
@@ -120,13 +120,13 @@ WORKDIR /data
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 修复点：libimath29 → libimath-3-1（Ubuntu22.04原生运行库）
+# 移除多余imath包，仅保留libopenexr25，其内部自带Imath运行库
 RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-install-recommends --no-install-suggests \
     python3 python3-pip \
     libboost-program-options1.74.0 libboost-filesystem1.74.0 libboost-graph1.74.0 libboost-system1.74.0 \
     libceres2 libgoogle-glog0v5 libgflags2.2 \
     libtiff5 libjpeg8 libpng16-16 zlib1g \
-    libopenexr25 libimath-3-1-29 \
+    libopenexr25 \
     libcurl4 libssl3 libsqlite3-0 libomp5 libmetis5 \
     libc6 libgcc-s1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
