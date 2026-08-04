@@ -131,15 +131,19 @@ ENV DEBIAN_FRONTEND=noninteractive
 # 补充多架构动态库路径，兼容 COLMAP FetchContent 编译的底层库
 ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:/usr/local/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/bin:$PATH
-# 指向 Builder 阶段独立安装的 Python 包目录
-ENV PYTHONPATH=/usr/local/python:$PYTHONPATH
+# 修复 Warning：直接赋值即可，无需拼接未定义的旧变量
+ENV PYTHONPATH=/usr/local/python
 
 WORKDIR /data
 
+# 关键修复：runtime 基础镜像默认不带 universe 源，必须手动追加，否则找不到 libopenexr 等包
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
-    sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
+    sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+    echo "deb http://mirrors.aliyun.com/ubuntu/ jammy universe" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.aliyun.com/ubuntu/ jammy-updates universe" >> /etc/apt/sources.list && \
+    echo "deb http://mirrors.aliyun.com/ubuntu/ jammy-security universe" >> /etc/apt/sources.list
 
-# 关键修复：Ubuntu 22.04 下 OpenEXR 3.1 的运行库包名已变更，必须与 Builder 阶段 ABI 匹配
+# 安装运行依赖库
 RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-install-recommends --no-install-suggests \
     python3 python3-pip \
     libboost-program-options1.74.0 libboost-filesystem1.74.0 libboost-graph1.74.0 libboost-system1.74.0 \
