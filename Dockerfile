@@ -18,6 +18,7 @@ ARG INSTALL_PREFIX=/workspace/install
 
 WORKDIR /workspace
 
+# 替换阿里apt源
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
@@ -28,14 +29,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libeigen3-dev libsuitesparse-dev libmetis-dev \
     libceres-dev libgoogle-glog-dev libgflags-dev libgtest-dev libgmock-dev \
     libtiff-dev libjpeg-dev libpng-dev zlib1g-dev \
-    libopenexr-dev \
+    libopenexr-dev libimath-dev \
     libcurl4-openssl-dev libssl-dev libsqlite3-dev \
-    qt6-base-dev libqt6opengl6-dev libqt6openglwidgets6 libomp-dev \
+    libomp-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /usr/include/opencv4
 
-# 编译OpenImageIO：关闭OCIO，规避pystring依赖报错，自动内置pugixml
+# 编译OpenImageIO：方案一核心配置，关闭OCIO、禁用自动下载依赖
 RUN git clone --depth 1 --branch v3.2.0.2-dev https://github.com/AcademySoftwareFoundation/OpenImageIO.git /tmp/oiio && \
     mkdir -p /tmp/oiio/build && cd /tmp/oiio/build && \
     cmake .. -GNinja \
@@ -47,11 +48,13 @@ RUN git clone --depth 1 --branch v3.2.0.2-dev https://github.com/AcademySoftware
     -DUSE_OPENGL=OFF \
     -DUSE_OPENCV=OFF \
     -DUSE_OCIO=OFF \
-    -DOpenImageIO_BUILD_MISSING_DEPS=required \
+    -DOpenImageIO_BUILD_MISSING_DEPS=none \
     -DOpenEXR_ROOT=/usr \
+    -DImath_ROOT=/usr \
     -DSTOP_ON_WARNING=OFF \
     -DEMBEDPLUGINS=1 \
-    && ninja install && rm -rf /tmp/oiio
+    && ninja install \
+    && rm -rf /tmp/oiio
 
 RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir scikit-learn scipy numpy progressbar2
@@ -72,7 +75,7 @@ RUN cd ./thirdparty/PoseLib && mkdir build && cd build && \
     -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} && \
     ninja install
 
-# 编译COLMAP，关闭GUI削减冗余依赖，精准链接已编译OIIO
+# 编译COLMAP，关闭GUI，精准链接已编译好的OIIO
 RUN cd ./thirdparty/colmap && mkdir -p build/.ccache && cd build && \
     cmake .. -GNinja \
     -DCMAKE_BUILD_TYPE=Release \
@@ -110,26 +113,28 @@ COPY --from=builder /workspace/build/.ccache/ /.ccache/
 FROM nvidia/cuda:${NVIDIA_CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/bin:$PATH
 WORKDIR /data
 
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 移除无用Qt运行依赖，精简镜像体积
+# 运行期仅保留必要运行库，彻底剔除Qt、编译类依赖
 RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-install-recommends --no-install-suggests \
     python3 python3-pip \
     libboost-program-options1.74.0 libboost-filesystem1.74.0 libboost-graph1.74.0 libboost-system1.74.0 \
     libceres2 libgoogle-glog0v5 libgflags2.2 \
     libtiff5 libjpeg8 libpng16-16 zlib1g \
-    libopenexr25 \
+    libopenexr25 libimath29 \
     libcurl4 libssl3 libsqlite3-0 libomp5 libmetis5 \
     libc6 libgcc-s1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# 拷贝编译产出至运行环境系统目录
 COPY --from=builder /workspace/install/ /usr/local/
 
+# 更新系统动态链接缓存
 RUN ldconfig
 
 ENTRYPOINT ["hie_glomap"]
