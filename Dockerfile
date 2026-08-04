@@ -35,7 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN mkdir -p /usr/include/opencv4
 
-# 编译OpenImageIO，对齐官方规范，规避版本冲突、编译中断、插件加载异常
+# 编译OpenImageIO：移除USE_EXTERNAL_PUGIXML，由OIIO自动内置编译pugixml
 RUN git clone --depth 1 --branch v3.2.0.2-dev https://github.com/AcademySoftwareFoundation/OpenImageIO.git /tmp/oiio && \
     mkdir -p /tmp/oiio/build && cd /tmp/oiio/build && \
     cmake .. -GNinja \
@@ -50,7 +50,6 @@ RUN git clone --depth 1 --branch v3.2.0.2-dev https://github.com/AcademySoftware
     -DOpenEXR_ROOT=/usr \
     -DSTOP_ON_WARNING=OFF \
     -DEMBEDPLUGINS=1 \
-    -DUSE_EXTERNAL_PUGIXML=ON \
     && ninja install && rm -rf /tmp/oiio
 
 RUN pip3 install --no-cache-dir --upgrade pip && \
