@@ -120,13 +120,13 @@ WORKDIR /data
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 运行期仅保留必要运行库，彻底剔除Qt、编译类依赖
+# 修复点：libimath29 → libimath-3-1（Ubuntu22.04原生运行库）
 RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-install-recommends --no-install-suggests \
     python3 python3-pip \
     libboost-program-options1.74.0 libboost-filesystem1.74.0 libboost-graph1.74.0 libboost-system1.74.0 \
     libceres2 libgoogle-glog0v5 libgflags2.2 \
     libtiff5 libjpeg8 libpng16-16 zlib1g \
-    libopenexr25 libimath29 \
+    libopenexr25 libimath-3-1-29 \
     libcurl4 libssl3 libsqlite3-0 libomp5 libmetis5 \
     libc6 libgcc-s1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
