@@ -9,7 +9,6 @@ FROM nvidia/cuda:${NVIDIA_CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION} AS builder
 ARG CUDA_ARCHITECTURES="75;80;86"
 ARG FETCHCONTENT_FULLY_DISCONNECTED=OFF
 
-# 环境变量配置
 ENV DEBIAN_FRONTEND=noninteractive
 ENV QT_XCB_GL_INTEGRATION=xcb_egl
 ENV CCACHE_DIR=/workspace/build/.ccache
@@ -18,14 +17,13 @@ ENV CC=gcc-11
 ENV CXX=g++-11
 
 WORKDIR /workspace
-# 统一编译输出安装目录，对标COLMAP官方打包结构
 ARG INSTALL_PREFIX=/workspace/install
 
-# 替换阿里云Ubuntu软件源
+# 替换阿里云源
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 安装全套编译依赖，预装OpenEXR+Imath开发库，OIIO不走联网拉依赖
+# 移除冲突的 libimath-dev，仅保留 libopenexr-dev
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ccache cmake ninja-build build-essential git curl wget tar unzip \
     python3-dev python3-pip python3-numpy python3-scipy \
@@ -33,15 +31,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libeigen3-dev libsuitesparse-dev libmetis-dev \
     libceres-dev libgoogle-glog-dev libgflags-dev libgtest-dev libgmock-dev \
     libtiff-dev libjpeg-dev libpng-dev zlib1g-dev \
-    libopenexr-dev libimath-dev \
+    libopenexr-dev \
     libcurl4-openssl-dev libssl-dev libsqlite3-dev \
     qt6-base-dev libqt6opengl6-dev libqt6openglwidgets6 libcgal-dev libomp-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# COLMAP经典兼容补丁，规避OIIO CMake检测OpenCV路径报错
+# 兼容补丁，规避OIIO CMake检测OpenCV路径告警
 RUN mkdir -p /usr/include/opencv4
 
-# 编译 OpenImageIO，使用系统自带OpenEXR/Imath，关闭在线下载依赖
+# 编译 OpenImageIO，依托系统 libopenexr-dev，去掉 Imath_ROOT 配置
 RUN git clone --depth 1 --branch v3.1.16 https://github.com/AcademySoftwareFoundation/OpenImageIO.git /tmp/oiio && \
     mkdir -p /tmp/oiio/build && cd /tmp/oiio/build && \
     cmake .. -GNinja \
@@ -53,23 +51,22 @@ RUN git clone --depth 1 --branch v3.1.16 https://github.com/AcademySoftwareFound
         -DUSE_OPENCV=OFF \
         -DOpenImageIO_BUILD_MISSING_DEPS=OFF \
         -DOpenEXR_ROOT=/usr \
-        -DImath_ROOT=/usr \
     && ninja install && rm -rf /tmp/oiio
 
-# 安装Python业务依赖
+# Python依赖
 RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir scikit-learn scipy numpy progressbar2
 
-# 拷贝业务源码进入容器
+# 拷贝项目源码
 COPY . /workspace/project
 WORKDIR /workspace/project
 
-# 拉取PoseLib、COLMAP（包含子模块）
+# 拉取第三方库
 RUN rm -rf ./thirdparty/PoseLib ./thirdparty/colmap && \
     git clone --recursive https://github.com/PoseLib/PoseLib.git ./thirdparty/PoseLib && \
     git clone --recursive https://github.com/colmap/colmap.git ./thirdparty/colmap
 
-# 编译安装 PoseLib
+# 编译 PoseLib
 RUN cd ./thirdparty/PoseLib && mkdir build && cd build && \
     cmake .. -GNinja \
         -DCMAKE_BUILD_TYPE=Release \
@@ -78,7 +75,7 @@ RUN cd ./thirdparty/PoseLib && mkdir build && cd build && \
         -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} && \
     ninja install
 
-# 编译 COLMAP，指定OIIO编译产物路径
+# 编译 COLMAP
 RUN cd ./thirdparty/colmap && mkdir -p build/.ccache && cd build && \
     cmake .. -GNinja \
         -DCMAKE_BUILD_TYPE=Release \
@@ -91,7 +88,7 @@ RUN cd ./thirdparty/colmap && mkdir -p build/.ccache && cd build && \
         -DOpenImageIO_DIR=${INSTALL_PREFIX}/lib/cmake/OpenImageIO && \
     ninja install
 
-# 编译自身业务工程
+# 编译业务工程
 RUN mkdir -p build && cd build && \
     cmake .. -GNinja \
         -DCMAKE_BUILD_TYPE=Release \
@@ -108,11 +105,11 @@ RUN mkdir -p build && cd build && \
         -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} && \
     ninja install
 
-# 缓存导出阶段（可选，用于本地ccache复用）
+# 缓存导出（可选）
 FROM scratch AS cache-export
 COPY --from=builder /workspace/build/.ccache/ /.ccache/
 
-# ======================== Runtime 运行镜像阶段 ========================
+# ======================== Runtime 运行镜像 ========================
 FROM nvidia/cuda:${NVIDIA_CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -120,11 +117,10 @@ ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/bin:$PATH
 WORKDIR /data
 
-# 替换阿里云apt源
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 运行时依赖：移除不存在的libimath25，仅保留libopenexr25
+# 运行时依赖，仅保留 libopenexr25
 RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-install-recommends --no-install-suggests \
     python3 python3-pip \
     libboost-program-options1.74.0 libboost-filesystem1.74.0 libboost-graph1.74.0 libboost-system1.74.0 \
@@ -136,11 +132,10 @@ RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-insta
     libc6 libgcc-s1 libgl1 libopengl0 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# 把builder编译好的程序、库文件整体拷贝到运行环境
+# 拷贝编译产物
 COPY --from=builder /workspace/install/ /usr/local/
 
-# 刷新系统动态链接器缓存
+# 更新动态链接缓存
 RUN ldconfig
 
-# 容器启动入口
 ENTRYPOINT ["hie_glomap"]
