@@ -19,11 +19,11 @@ ENV CXX=g++-11
 WORKDIR /workspace
 ARG INSTALL_PREFIX=/workspace/install
 
-# 替换阿里云源
+# 替换阿里云apt源
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 移除冲突的 libimath-dev，仅保留 libopenexr-dev
+# 安装依赖：移除冲突libimath-dev，仅保留libopenexr-dev
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ccache cmake ninja-build build-essential git curl wget tar unzip \
     python3-dev python3-pip python3-numpy python3-scipy \
@@ -39,8 +39,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 兼容补丁，规避OIIO CMake检测OpenCV路径告警
 RUN mkdir -p /usr/include/opencv4
 
-# 编译 OpenImageIO，依托系统 libopenexr-dev，去掉 Imath_ROOT 配置
-RUN git clone --depth 1 --branch v3.1.16 https://github.com/AcademySoftwareFoundation/OpenImageIO.git /tmp/oiio && \
+# 正确拉取 v3.1.16.0 标签
+RUN git clone --depth 1 --branch v3.1.16.0 https://github.com/AcademySoftwareFoundation/OpenImageIO.git /tmp/oiio && \
     mkdir -p /tmp/oiio/build && cd /tmp/oiio/build && \
     cmake .. -GNinja \
         -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} \
@@ -53,15 +53,15 @@ RUN git clone --depth 1 --branch v3.1.16 https://github.com/AcademySoftwareFound
         -DOpenEXR_ROOT=/usr \
     && ninja install && rm -rf /tmp/oiio
 
-# Python依赖
+# 安装Python业务依赖
 RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir scikit-learn scipy numpy progressbar2
 
-# 拷贝项目源码
+# 拷贝项目源码进入容器
 COPY . /workspace/project
 WORKDIR /workspace/project
 
-# 拉取第三方库
+# 拉取PoseLib、COLMAP（递归拉取子模块）
 RUN rm -rf ./thirdparty/PoseLib ./thirdparty/colmap && \
     git clone --recursive https://github.com/PoseLib/PoseLib.git ./thirdparty/PoseLib && \
     git clone --recursive https://github.com/colmap/colmap.git ./thirdparty/colmap
@@ -88,7 +88,7 @@ RUN cd ./thirdparty/colmap && mkdir -p build/.ccache && cd build && \
         -DOpenImageIO_DIR=${INSTALL_PREFIX}/lib/cmake/OpenImageIO && \
     ninja install
 
-# 编译业务工程
+# 编译自身业务工程
 RUN mkdir -p build && cd build && \
     cmake .. -GNinja \
         -DCMAKE_BUILD_TYPE=Release \
@@ -105,7 +105,7 @@ RUN mkdir -p build && cd build && \
         -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} && \
     ninja install
 
-# 缓存导出（可选）
+# 缓存导出阶段（可选，本地复用编译缓存）
 FROM scratch AS cache-export
 COPY --from=builder /workspace/build/.ccache/ /.ccache/
 
@@ -117,10 +117,11 @@ ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/bin:$PATH
 WORKDIR /data
 
+# 替换阿里云源
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 运行时依赖，仅保留 libopenexr25
+# 运行时依赖，仅保留libopenexr25，无Imath相关包
 RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-install-recommends --no-install-suggests \
     python3 python3-pip \
     libboost-program-options1.74.0 libboost-filesystem1.74.0 libboost-graph1.74.0 libboost-system1.74.0 \
@@ -132,10 +133,11 @@ RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-insta
     libc6 libgcc-s1 libgl1 libopengl0 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# 拷贝编译产物
+# 拷贝builder编译好的程序、库文件
 COPY --from=builder /workspace/install/ /usr/local/
 
-# 更新动态链接缓存
+# 刷新系统动态链接库缓存
 RUN ldconfig
 
+# 容器启动入口
 ENTRYPOINT ["hie_glomap"]
