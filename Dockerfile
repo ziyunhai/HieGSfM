@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+# 全局基础参数
 ARG UBUNTU_VERSION=22.04
 ARG NVIDIA_CUDA_VERSION=12.3.1
 ARG CUDA_ARCHITECTURES="75;80;86"
@@ -7,23 +8,24 @@ ARG INSTALL_PREFIX=/workspace/install
 ARG COLMAP_GIT_COMMIT=66fd8e5
 ARG POSELIB_GIT_COMMIT=0439b2d
 
-# -------------------------- Builder 编译阶段 --------------------------
+# -------------------------- 编译构建阶段 Builder --------------------------
 FROM nvidia/cuda:${NVIDIA_CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION} AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV QT_XCB_GL_INTEGRATION=xcb_egl
+# 移除全部 ccache 相关环境变量
 ENV CC=gcc-11
 ENV CXX=g++-11
 
 WORKDIR /workspace
 
-# 替换阿里apt源
+# 替换阿里apt国内镜像源
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 1. 安装基础编译依赖（剔除ccache）
+# 卸载ccache安装，其余编译依赖保留，显式安装gcc-11/g++-11锁定编译器
 RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-install-recommends \
-    ninja-build build-essential gcc-11 g++-11 git curl wget tar unzip \
+    cmake ninja-build build-essential gcc-11 g++-11 git curl wget tar unzip \
     python3-dev python3-pip \
     libboost-program-options-dev libboost-filesystem-dev libboost-graph-dev libboost-system-dev \
     libeigen3-dev libsuitesparse-dev libmetis-dev libflann-dev libcgal-dev \
@@ -35,18 +37,11 @@ RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-insta
     libomp-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. 安装 CMake 3.28.6 满足 >=3.27 要求
-RUN wget https://github.com/Kitware/CMake/releases/download/v3.28.6/cmake-3.28.6-linux-x86_64.tar.gz && \
-    tar -zxvf cmake-3.28.6-linux-x86_64.tar.gz -C /opt/ && \
-    rm -f cmake-3.28.6-linux-x86_64.tar.gz && \
-    ln -s /opt/cmake-3.28.6-linux-x86_64/bin/* /usr/local/bin/ && \
-    cmake --version
-
-# Python依赖安装至独立目录
+# Python依赖安装至独立目录，后续直接拷贝至运行环境
 RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --target=${INSTALL_PREFIX}/python --no-cache-dir scikit-learn scipy numpy progressbar2
 
-# 拉取固定commit第三方库
+# 拉取固定Commit版本的PoseLib、COLMAP
 RUN git clone https://github.com/PoseLib/PoseLib.git /tmp/PoseLib && \
     cd /tmp/PoseLib && git checkout ${POSELIB_GIT_COMMIT} && git submodule update --init --recursive && \
     git clone https://github.com/colmap/colmap.git /tmp/colmap && \
@@ -56,7 +51,13 @@ RUN git clone https://github.com/PoseLib/PoseLib.git /tmp/PoseLib && \
 COPY . /workspace/project
 WORKDIR /workspace/project
 
-# 替换第三方库，清理临时文件
+RUN wget https://github.com/Kitware/CMake/releases/download/v3.28.6/cmake-3.28.6-linux-x86_64.tar.gz && \
+    tar -zxvf cmake-3.28.6-linux-x86_64.tar.gz -C /opt/ && \
+    rm -f cmake-3.28.6-linux-x86_64.tar.gz && \
+    ln -s /opt/cmake-3.28.6-linux-x86_64/bin/* /usr/local/bin/ && \
+    cmake --version
+
+# 替换项目内原有第三方目录，清理临时文件减小构建层体积
 RUN rm -rf ./thirdparty/PoseLib ./thirdparty/colmap && \
     mv /tmp/PoseLib ./thirdparty/PoseLib && \
     mv /tmp/colmap ./thirdparty/colmap && \
@@ -71,7 +72,7 @@ RUN mkdir -p thirdparty/PoseLib/build && cd thirdparty/PoseLib/build && \
     -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} && \
     ninja install
 
-# 编译 COLMAP
+# 编译 COLMAP，关闭GUI界面
 RUN mkdir -p thirdparty/colmap/build && cd thirdparty/colmap/build && \
     cmake .. -GNinja \
     -DCMAKE_BUILD_TYPE=Release \
@@ -83,7 +84,7 @@ RUN mkdir -p thirdparty/colmap/build && cd thirdparty/colmap/build && \
     -DFETCHCONTENT_FULLY_DISCONNECTED=${FETCHCONTENT_FULLY_DISCONNECTED} && \
     ninja install
 
-# 编译业务工程：已彻底删除全部ccache相关参数
+# 编译业务主工程，移除所有ccache相关CMake参数
 RUN mkdir build && cd build && \
     cmake .. -GNinja \
     -DCMAKE_BUILD_TYPE=Release \
@@ -99,7 +100,8 @@ RUN mkdir build && cd build && \
     -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} && \
     ninja install
 
-# -------------------------- Runtime 运行阶段 --------------------------
+# -------------------------- 精简运行阶段 Runtime --------------------------
+# 重新声明全局ARG，本阶段生效
 ARG UBUNTU_VERSION=22.04
 ARG NVIDIA_CUDA_VERSION=12.3.1
 FROM nvidia/cuda:${NVIDIA_CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} AS runtime
@@ -107,13 +109,15 @@ FROM nvidia/cuda:${NVIDIA_CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} AS runti
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:/usr/local/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/bin:$PATH
+# Ubuntu22.04默认python3.10，精准指定site-packages路径
 ENV PYTHONPATH=/usr/local/python/lib/python3.10/site-packages
+# GPU容器运行基础权限
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
 
 WORKDIR /data
 
-# 重置完整阿里源
+# 重写完整阿里云源，一次性补齐universe组件，避免重复追加源
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g; s/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     cat > /etc/apt/sources.list <<EOF
 deb http://mirrors.aliyun.com/ubuntu/ jammy main restricted universe multiverse
@@ -121,7 +125,7 @@ deb http://mirrors.aliyun.com/ubuntu/ jammy-updates main restricted universe mul
 deb http://mirrors.aliyun.com/ubuntu/ jammy-security main restricted universe multiverse
 EOF
 
-# 运行时依赖
+# 安装运行期依赖，附带OpenGL GPU渲染运行库
 RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-install-recommends --no-install-suggests \
     python3 python3-pip libnvidia-gl-545 \
     libboost-program-options1.74.0 libboost-filesystem1.74.0 libboost-graph1.74.0 libboost-system1.74.0 \
@@ -134,16 +138,19 @@ RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-insta
     libc6 libgcc-s1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# 拷贝编译产物
+# 复制Builder编译好的二进制、动态库、Python依赖
 COPY --from=builder /workspace/install/ /usr/local/
 
+# 刷新系统动态链接缓存
 RUN ldconfig
 
-# 二进制与依赖校验
-RUN if ! command -v hie_glomap; then echo "ERROR: hie_glomap binary missing!"; exit 1; fi && \
-    ldd $(which hie_glomap) | grep "not found" && (echo "ERROR: Missing runtime libs"; exit 1) || true
+# 前置校验：二进制文件存在性 + 依赖库完整性检查
+RUN if ! command -v hie_glomap; then echo "ERROR: hie_glomap executable not found!"; exit 1; fi && \
+    ldd $(which hie_glomap) | grep "not found" && (echo "ERROR: Missing runtime dynamic libraries!"; exit 1) || true
 
+# 容器健康探测
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
     CMD pgrep hie_glomap || exit 1
 
+# 默认启动命令，支持交互式覆盖进入容器调试
 CMD ["hie_glomap"]
