@@ -1,34 +1,29 @@
 # syntax=docker/dockerfile:1
 ARG UBUNTU_VERSION=22.04
 ARG NVIDIA_CUDA_VERSION=12.3.1
+ARG CUDA_ARCHITECTURES="75;80;86"
+ARG FETCHCONTENT_FULLY_DISCONNECTED=OFF
+ARG INSTALL_PREFIX=/workspace/install
+ARG COLMAP_GIT_COMMIT=66fd8e5
+ARG POSELIB_GIT_COMMIT=0439b2d
 
-# -------------------------- 编译构建阶段 Builder --------------------------
+# -------------------------- Builder 编译阶段 --------------------------
 FROM nvidia/cuda:${NVIDIA_CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION} AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV QT_XCB_GL_INTEGRATION=xcb_egl
-ENV CCACHE_DIR=/workspace/build/.ccache
-ENV CCACHE_BASEDIR=/workspace
-# 修复 ccache 绕过问题，确保环境变量正确接管
-ENV CC="ccache gcc-11"
-ENV CXX="ccache g++-11"
-
-ARG CUDA_ARCHITECTURES="75;80;86"
-ARG FETCHCONTENT_FULLY_DISCONNECTED=OFF
-ARG INSTALL_PREFIX=/workspace/install
-# 锁定指定的 Git Commit 版本
-ARG COLMAP_GIT_COMMIT=66fd8e5
-ARG POSELIB_GIT_COMMIT=0439b2d
+ENV CC=gcc-11
+ENV CXX=g++-11
 
 WORKDIR /workspace
 
-# 替换阿里apt源并增加超时防止网络卡死
+# 替换阿里apt源
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# [破除缓存修复]：Ubuntu 22.04 中 libgl1-mesa-dev 已被拆分，必须显式安装 libgl-dev 和 libglx-dev 才能满足 CMake 对 OpenGL 的寻找
+# 1. 安装基础编译依赖（剔除ccache）
 RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-install-recommends \
-    ccache cmake ninja-build build-essential git curl wget tar unzip \
+    ninja-build build-essential gcc-11 g++-11 git curl wget tar unzip \
     python3-dev python3-pip \
     libboost-program-options-dev libboost-filesystem-dev libboost-graph-dev libboost-system-dev \
     libeigen3-dev libsuitesparse-dev libmetis-dev libflann-dev libcgal-dev \
@@ -40,46 +35,47 @@ RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-insta
     libomp-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 将 Python 依赖安装到独立的 target 目录，避免与系统环境冲突且方便直接拷贝到 Runtime
+# 2. 卸载系统cmake 3.22，安装 CMake 3.28.6 满足 >=3.27 要求
+RUN apt-get remove -y cmake && \
+    wget https://github.com/Kitware/CMake/releases/download/v3.28.6/cmake-3.28.6-linux-x86_64.tar.gz && \
+    tar -zxvf cmake-3.28.6-linux-x86_64.tar.gz -C /opt/ && \
+    rm -f cmake-3.28.6-linux-x86_64.tar.gz && \
+    ln -s /opt/cmake-3.28.6-linux-x86_64/bin/* /usr/local/bin/ && \
+    cmake --version
+
+# Python依赖安装至独立目录
 RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --target=${INSTALL_PREFIX}/python --no-cache-dir scikit-learn scipy numpy progressbar2
 
-# 优化缓存：先 clone 第三方库到 /tmp，并切换到指定的 Commit 版本
+# 拉取固定commit第三方库
 RUN git clone https://github.com/PoseLib/PoseLib.git /tmp/PoseLib && \
-    cd /tmp/PoseLib && \
-    git checkout ${POSELIB_GIT_COMMIT} && \
-    git submodule update --init --recursive && \
+    cd /tmp/PoseLib && git checkout ${POSELIB_GIT_COMMIT} && git submodule update --init --recursive && \
     git clone https://github.com/colmap/colmap.git /tmp/colmap && \
-    cd /tmp/colmap && \
-    git checkout ${COLMAP_GIT_COMMIT} && \
-    git submodule update --init --recursive
+    cd /tmp/colmap && git checkout ${COLMAP_GIT_COMMIT} && git submodule update --init --recursive
 
-# 拷贝业务代码 (强烈建议在项目根目录添加 .dockerignore 文件，忽略 thirdparty 目录)
+# 拷贝项目代码
 COPY . /workspace/project
 WORKDIR /workspace/project
 
-# 替换本地可能存在的旧版第三方库，使用刚才 clone 好的纯净版本
+# 替换第三方库，清理临时文件
 RUN rm -rf ./thirdparty/PoseLib ./thirdparty/colmap && \
     mv /tmp/PoseLib ./thirdparty/PoseLib && \
-    mv /tmp/colmap ./thirdparty/colmap
+    mv /tmp/colmap ./thirdparty/colmap && \
+    rm -rf /tmp/*
 
-# 编译PoseLib
-RUN cd ./thirdparty/PoseLib && mkdir build && cd build && \
+# 编译 PoseLib
+RUN mkdir -p thirdparty/PoseLib/build && cd thirdparty/PoseLib/build && \
     cmake .. -GNinja \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-    -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
     -DCMAKE_CXX_STANDARD=17 \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} && \
     ninja install
 
-# 编译COLMAP，关闭GUI (COLMAP 底层 Meshing/Rendering 仍需要 OpenGL 支持)
-RUN cd ./thirdparty/colmap && mkdir -p build && cd build && \
+# 编译 COLMAP
+RUN mkdir -p thirdparty/colmap/build && cd thirdparty/colmap/build && \
     cmake .. -GNinja \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-    -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
     -DCUDA_ENABLED=ON \
     -DGUI_ENABLED=OFF \
     -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES} \
@@ -88,51 +84,47 @@ RUN cd ./thirdparty/colmap && mkdir -p build && cd build && \
     -DFETCHCONTENT_FULLY_DISCONNECTED=${FETCHCONTENT_FULLY_DISCONNECTED} && \
     ninja install
 
-# 编译业务工程
-RUN mkdir -p build && cd build && \
+# 编译业务工程：已彻底删除全部ccache相关参数
+RUN mkdir build && cd build && \
     cmake .. -GNinja \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-    -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
     -DCMAKE_CXX_STANDARD=17 \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DFETCH_COLMAP=OFF \
     -DFETCH_POSELIB=OFF \
     -DTESTS_ENABLED=OFF \
     -DASAN_ENABLED=OFF \
-    -DCCACHE_ENABLED=ON \
     -DCUDA_ENABLED=ON \
     -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES} \
     -DCMAKE_CUDA_FLAGS="-Wno-deprecated-declarations" \
     -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} && \
     ninja install
 
-# ccache缓存导出阶段
-FROM scratch AS cache-export
-COPY --from=builder /workspace/build/.ccache/ /.ccache/
-
-# -------------------------- 精简运行阶段 Runtime --------------------------
+# -------------------------- Runtime 运行阶段 --------------------------
+ARG UBUNTU_VERSION=22.04
+ARG NVIDIA_CUDA_VERSION=12.3.1
 FROM nvidia/cuda:${NVIDIA_CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
-# 补充多架构动态库路径，兼容 COLMAP FetchContent 编译的底层库
 ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:/usr/local/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/bin:$PATH
-# 修复 Warning：直接赋值即可，无需拼接未定义的旧变量
-ENV PYTHONPATH=/usr/local/python
+ENV PYTHONPATH=/usr/local/python/lib/python3.10/site-packages
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
 
 WORKDIR /data
 
-# 关键修复：runtime 基础镜像默认不带 universe 源，必须手动追加
-RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
-    sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/ubuntu/ jammy universe" >> /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/ubuntu/ jammy-updates universe" >> /etc/apt/sources.list && \
-    echo "deb http://mirrors.aliyun.com/ubuntu/ jammy-security universe" >> /etc/apt/sources.list
+# 重置完整阿里源
+RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g; s/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
+    cat > /etc/apt/sources.list <<EOF
+deb http://mirrors.aliyun.com/ubuntu/ jammy main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ jammy-updates main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ jammy-security main restricted universe multiverse
+EOF
 
-# 安装运行依赖库：补充对应的 OpenGL 运行时库
+# 运行时依赖
 RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-install-recommends --no-install-suggests \
-    python3 python3-pip \
+    python3 python3-pip libnvidia-gl-545 \
     libboost-program-options1.74.0 libboost-filesystem1.74.0 libboost-graph1.74.0 libboost-system1.74.0 \
     libceres2 libgoogle-glog0v5 libgflags2.2 \
     libtiff5 libjpeg8 libpng16-16 zlib1g \
@@ -143,14 +135,16 @@ RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-insta
     libc6 libgcc-s1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# 拷贝编译产出至运行环境系统目录 (包含了 bin, lib, 以及 python 目录)
+# 拷贝编译产物
 COPY --from=builder /workspace/install/ /usr/local/
 
-# 更新系统动态链接缓存
 RUN ldconfig
 
-# 强制健康检查：如果业务主程序有任何依赖库缺失（not found），直接使构建失败，拦截问题
-RUN ldd $(which hie_glomap) | grep "not found" && (echo "ERROR: Missing runtime dependencies!" && exit 1) || true
+# 二进制与依赖校验
+RUN if ! command -v hie_glomap; then echo "ERROR: hie_glomap binary missing!"; exit 1; fi && \
+    ldd $(which hie_glomap) | grep "not found" && (echo "ERROR: Missing runtime libs"; exit 1) || true
 
-# 使用 CMD 代替 ENTRYPOINT，允许用户通过 docker run -it <image> /bin/bash 轻松进入容器排查问题
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD pgrep hie_glomap || exit 1
+
 CMD ["hie_glomap"]
