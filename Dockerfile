@@ -35,9 +35,8 @@ RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-insta
     libomp-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. 卸载系统cmake 3.22，安装 CMake 3.28.6 满足 >=3.27 要求
-RUN apt-get remove -y cmake && \
-    wget https://github.com/Kitware/CMake/releases/download/v3.28.6/cmake-3.28.6-linux-x86_64.tar.gz && \
+# 2. 安装 CMake 3.28.6 满足 >=3.27 要求
+RUN wget https://github.com/Kitware/CMake/releases/download/v3.28.6/cmake-3.28.6-linux-x86_64.tar.gz && \
     tar -zxvf cmake-3.28.6-linux-x86_64.tar.gz -C /opt/ && \
     rm -f cmake-3.28.6-linux-x86_64.tar.gz && \
     ln -s /opt/cmake-3.28.6-linux-x86_64/bin/* /usr/local/bin/ && \
