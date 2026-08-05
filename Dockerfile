@@ -26,7 +26,7 @@ WORKDIR /workspace
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 融合官方依赖：补充了 libflann-dev 和 libcgal-dev，并补回 libfreeimage-dev 以替代 OpenImageIO
+# [破除缓存修复]：Ubuntu 22.04 中 libgl1-mesa-dev 已被拆分，必须显式安装 libgl-dev 和 libglx-dev 才能满足 CMake 对 OpenGL 的寻找
 RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-install-recommends \
     ccache cmake ninja-build build-essential git curl wget tar unzip \
     python3-dev python3-pip \
@@ -35,6 +35,7 @@ RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-insta
     libceres-dev libgoogle-glog-dev libgflags-dev libgtest-dev libgmock-dev \
     libtiff-dev libjpeg-dev libpng-dev zlib1g-dev \
     libfreeimage-dev \
+    libgl-dev libglx-dev libegl-dev libglew-dev \
     libcurl4-openssl-dev libssl-dev libsqlite3-dev \
     libomp-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -44,7 +45,6 @@ RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --target=${INSTALL_PREFIX}/python --no-cache-dir scikit-learn scipy numpy progressbar2
 
 # 优化缓存：先 clone 第三方库到 /tmp，并切换到指定的 Commit 版本
-# 使用完整 clone 以确保能够准确 checkout 到任意 commit hash，随后更新子模块
 RUN git clone https://github.com/PoseLib/PoseLib.git /tmp/PoseLib && \
     cd /tmp/PoseLib && \
     git checkout ${POSELIB_GIT_COMMIT} && \
@@ -74,7 +74,7 @@ RUN cd ./thirdparty/PoseLib && mkdir build && cd build && \
     -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} && \
     ninja install
 
-# 编译COLMAP，关闭GUI (移除了 OpenImageIO_DIR 参数，COLMAP 将自动使用系统 FreeImage)
+# 编译COLMAP，关闭GUI (COLMAP 底层 Meshing/Rendering 仍需要 OpenGL 支持)
 RUN cd ./thirdparty/colmap && mkdir -p build && cd build && \
     cmake .. -GNinja \
     -DCMAKE_BUILD_TYPE=Release \
@@ -123,21 +123,21 @@ ENV PYTHONPATH=/usr/local/python
 
 WORKDIR /data
 
-# 关键修复：runtime 基础镜像默认不带 universe 源，必须手动追加，否则找不到部分依赖包
+# 关键修复：runtime 基础镜像默认不带 universe 源，必须手动追加
 RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     sed -i 's/security.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && \
     echo "deb http://mirrors.aliyun.com/ubuntu/ jammy universe" >> /etc/apt/sources.list && \
     echo "deb http://mirrors.aliyun.com/ubuntu/ jammy-updates universe" >> /etc/apt/sources.list && \
     echo "deb http://mirrors.aliyun.com/ubuntu/ jammy-security universe" >> /etc/apt/sources.list
 
-# 安装运行依赖库
-# 去除了 OpenEXR/Imath，补回了 libfreeimage3 以支持 COLMAP 的图像读写
+# 安装运行依赖库：补充对应的 OpenGL 运行时库
 RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-install-recommends --no-install-suggests \
     python3 python3-pip \
     libboost-program-options1.74.0 libboost-filesystem1.74.0 libboost-graph1.74.0 libboost-system1.74.0 \
     libceres2 libgoogle-glog0v5 libgflags2.2 \
     libtiff5 libjpeg8 libpng16-16 zlib1g \
     libfreeimage3 \
+    libgl1 libglx0 libegl1 libglew2.2 \
     libcurl4 libssl3 libsqlite3-0 libomp5 libmetis5 \
     libflann1.9 libgmp10 libmpfr6 \
     libc6 libgcc-s1 \
