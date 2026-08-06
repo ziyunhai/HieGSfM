@@ -1,0 +1,169 @@
+name: HieGSfM Builder - Build & Push to Aliyun ACR
+run-name: ${{ github.actor }} build HieGSfM with thirdparty locally
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - 'Dockerfile.builder'
+      - '.github/workflows/docker_builder_aliyun.yml'
+      - 'glomap/**'
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+  workflow_dispatch:
+    inputs:
+      build_debug:
+        description: "Build debug image (with debug symbols). Disabled by default."
+        required: false
+        default: false
+        type: boolean
+      no_cache:
+        description: "Skip Docker cache, rebuild from scratch."
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ======================== 下载 thirdparty 代码到本地 ========================
+  prepare-thirdparty:
+    name: Clone thirdparty (PoseLib + COLMAP) to local
+    runs-on: ubuntu-latest
+    outputs:
+      poselib_commit: ${{ steps.vars.outputs.poselib_commit }}
+      colmap_commit: ${{ steps.vars.outputs.colmap_commit }}
+    steps:
+      - name: Checkout main repository
+        uses: actions/checkout@v4
+
+      - name: Set thirdparty versions
+        id: vars
+        run: |
+          POSELIB_COMMIT="0439b2d361125915b8821043fca9376e6cc575b9"
+          COLMAP_COMMIT="66fd8e56a0d160d68af2f29e9ac6941d442d2322"
+          echo "poselib_commit=${POSELIB_COMMIT}" >> $GITHUB_OUTPUT
+          echo "colmap_commit=${COLMAP_COMMIT}" >> $GITHUB_OUTPUT
+          echo "PoseLib commit: ${POSELIB_COMMIT}"
+          echo "COLMAP commit:  ${COLMAP_COMMIT}"
+
+      - name: Clone PoseLib
+        run: |
+          rm -rf thirdparty/PoseLib
+          git clone https://github.com/PoseLib/PoseLib.git thirdparty/PoseLib
+          cd thirdparty/PoseLib
+          git checkout ${{ steps.vars.outputs.poselib_commit }}
+          git submodule update --init --recursive
+          echo "PoseLib cloned at $(git rev-parse --short HEAD)"
+
+      - name: Clone COLMAP
+        run: |
+          rm -rf thirdparty/colmap
+          git clone https://github.com/colmap/colmap.git thirdparty/colmap
+          cd thirdparty/colmap
+          git checkout ${{ steps.vars.outputs.colmap_commit }}
+          git submodule update --init --recursive
+          echo "COLMAP cloned at $(git rev-parse --short HEAD)"
+
+      - name: Verify thirdparty directories
+        run: |
+          echo "=== thirdparty/PoseLib ==="
+          ls -la thirdparty/PoseLib/CMakeLists.txt && echo "OK" || (echo "MISSING!"; exit 1)
+          echo "=== thirdparty/colmap ==="
+          ls -la thirdparty/colmap/CMakeLists.txt && echo "OK" || (echo "MISSING!"; exit 1)
+
+      # 将已下载的 thirdparty 上传为 artifact，供后续 build job 使用
+      - name: Upload thirdparty artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: thirdparty-sources
+          path: |
+            thirdparty/PoseLib/**
+            thirdparty/colmap/**
+          retention-days: 1
+
+  # ======================== 构建并推送 Docker 镜像 ========================
+  build-push:
+    name: Build & Push HieGSfM Runtime Image
+    needs: prepare-thirdparty
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.build_debug == 'true' && fromJSON('["Release", "Debug"]') || fromJSON('["Release"]') }}
+    steps:
+      - name: Checkout main repository
+        uses: actions/checkout@v4
+
+      # 下载 prepare-thirdparty job 上传的 thirdparty 源码
+      - name: Download thirdparty artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: thirdparty-sources
+          path: thirdparty/
+
+      - name: Verify thirdparty after download
+        run: |
+          echo "=== thirdparty/PoseLib ==="
+          ls -la thirdparty/PoseLib/CMakeLists.txt && echo "OK" || (echo "MISSING!"; exit 1)
+          echo "=== thirdparty/colmap ==="
+          ls -la thirdparty/colmap/CMakeLists.txt && echo "OK" || (echo "MISSING!"; exit 1)
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Aliyun Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build & Push Docker image (Dockerfile.builder)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.builder
+          target: runtime
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/hie_glomap:${{ matrix.build_type == 'Debug' && 'debug-latest' || 'latest' }}
+          build-args: |
+            BUILD_TYPE=${{ matrix.build_type }}
+          no-cache: ${{ github.event.inputs.no_cache || false }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Clean up Docker resources
+        if: always()
+        run: docker system prune -f
+
+      - name: Build Success Notification
+        if: success()
+        run: |
+          echo "✅ HieGSfM ${{ matrix.build_type }} 镜像构建推送阿里云 ACR 完成"
+          echo "📦 镜像: ${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/hie_glomap:${{ matrix.build_type == 'Debug' && 'debug-latest' || 'latest' }}"
+
+      - name: Build Failure Notification
+        if: failure()
+        run: |
+          echo "❌ HieGSfM ${{ matrix.build_type }} 镜像构建失败！请检查日志。"
+
+  # ======================== 汇总结果 ========================
+  summary:
+    name: Build Summary
+    needs: build-push
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report build status
+        run: |
+          if [ "${{ needs.build-push.result }}" = "success" ]; then
+            echo "✅ 所有构建任务已完成"
+          else
+            echo "❌ 构建失败，状态: ${{ needs.build-push.result }}"
+            exit 1
+          fi
