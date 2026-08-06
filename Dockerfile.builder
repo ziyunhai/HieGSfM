@@ -58,16 +58,20 @@ WORKDIR /workspace/project
 # vcpkg 清单模式安装所有依赖（自动读取 vcpkg.json）
 RUN /opt/vcpkg/vcpkg install --clean-after-build --triplet x64-linux
 
+# 记录 vcpkg 安装路径，供后续编译阶段引用
+ENV VCPKG_INSTALLED_DIR=/workspace/project/vcpkg_installed/x64-linux
+
 # Python 依赖
 RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --target=${INSTALL_PREFIX}/python --no-cache-dir \
     scikit-learn scipy numpy progressbar2
 
 # ======================== 编译 PoseLib ========================
+# 不使用 vcpkg toolchain，通过 CMAKE_PREFIX_PATH 找到 vcpkg 安装的 Eigen3
 RUN mkdir -p thirdparty/PoseLib/build && cd thirdparty/PoseLib/build && \
     cmake .. -GNinja \
     -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
-    -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE} \
+    -DCMAKE_PREFIX_PATH="${VCPKG_INSTALLED_DIR}" \
     -DCMAKE_CXX_STANDARD=17 \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} && \
@@ -75,10 +79,11 @@ RUN mkdir -p thirdparty/PoseLib/build && cd thirdparty/PoseLib/build && \
 
 # ======================== 编译 COLMAP ========================
 # 关闭 GUI，开启 CUDA 加速
+# 不使用 vcpkg toolchain，通过 CMAKE_PREFIX_PATH 找到 vcpkg 安装的依赖
 RUN mkdir -p thirdparty/colmap/build && cd thirdparty/colmap/build && \
     cmake .. -GNinja \
     -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
-    -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE} \
+    -DCMAKE_PREFIX_PATH="${VCPKG_INSTALLED_DIR}" \
     -DCUDA_ENABLED=ON \
     -DGUI_ENABLED=OFF \
     -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES} \
