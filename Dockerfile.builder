@@ -33,6 +33,7 @@ RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-insta
     pkg-config \
     python3 python3-pip \
     autoconf automake libtool \
+    gfortran \
     libgl-dev libglx-dev libegl-dev libglew-dev \
     && rm -rf /var/lib/apt/lists/*
 
