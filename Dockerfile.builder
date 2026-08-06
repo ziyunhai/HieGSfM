@@ -67,23 +67,23 @@ RUN pip3 install --no-cache-dir --upgrade pip && \
     scikit-learn scipy numpy progressbar2
 
 # ======================== 编译 PoseLib ========================
-# 不使用 vcpkg toolchain，通过 CMAKE_PREFIX_PATH 找到 vcpkg 安装的 Eigen3
+# 使用 vcpkg toolchain，显式指定 Eigen3_DIR 解决 vcpkg _find_package 包装器兼容问题
 RUN mkdir -p thirdparty/PoseLib/build && cd thirdparty/PoseLib/build && \
     cmake .. -GNinja \
     -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
-    -DCMAKE_PREFIX_PATH="${VCPKG_INSTALLED_DIR}" \
+    -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE} \
+    -DEigen3_DIR="${VCPKG_INSTALLED_DIR}/share/eigen3" \
     -DCMAKE_CXX_STANDARD=17 \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} && \
     ninja install
 
 # ======================== 编译 COLMAP ========================
-# 关闭 GUI，开启 CUDA 加速
-# 不使用 vcpkg toolchain，通过 CMAKE_PREFIX_PATH 找到 vcpkg 安装的依赖
+# 关闭 GUI，开启 CUDA 加速。COLMAP 内建 vcpkg 集成，必须使用 toolchain
 RUN mkdir -p thirdparty/colmap/build && cd thirdparty/colmap/build && \
     cmake .. -GNinja \
     -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
-    -DCMAKE_PREFIX_PATH="${VCPKG_INSTALLED_DIR}" \
+    -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE} \
     -DCUDA_ENABLED=ON \
     -DGUI_ENABLED=OFF \
     -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES} \
