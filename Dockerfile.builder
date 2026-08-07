@@ -146,7 +146,7 @@ RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-insta
 	    libfreeimage3 \
 	    libgl1 libglx0 libegl1 libglew2.2 \
 	    libsqlite3-0 liblz4-1 \
-	    libmetis5 libflann1.9 libsuitesparseconfig5.1.0 \
+	    libmetis5 libflann1.9 \
 	    libgomp1 \
 	    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
