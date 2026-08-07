@@ -32,7 +32,7 @@ RUN sed -i 's/archive.ubuntu.com/mirrors.aliyun.com/g' /etc/apt/sources.list && 
 RUN apt-get update -o Acquire::http::Timeout=60 && apt-get install -y --no-install-recommends \
     build-essential gcc-11 g++-11 \
     cmake ninja-build \
-    git curl wget tar unzip \
+    git curl wget tar unzip zip \
     pkg-config \
     python3 python3-pip \
     libboost-program-options-dev libboost-filesystem-dev libboost-graph-dev libboost-system-dev \
